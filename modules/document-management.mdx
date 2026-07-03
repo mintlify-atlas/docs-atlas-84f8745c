@@ -1,0 +1,129 @@
+---
+title: "Document Management: Employee Records and Digital Archive"
+sidebarTitle: "Documents"
+description: "Manage employee files, contracts, job titles, document categories, and physical/digital archives using Corpen's GDO (Gestión Documental) module."
+---
+
+The GDO (Gestión Documental) module provides a centralized digital archive for cooperative staff records. It covers the full employee lifecycle—from onboarding with identity data and job title assignment, through document uploads (contracts, IDs, certificates), to organized retrieval via category-typed catalogs. All binary assets—profile photos and document files—are stored on AWS S3 with scoped paths and short-lived temporary URLs, ensuring access-controlled delivery without exposing permanent storage links.
+
+## Sub-resources
+
+All routes are grouped under the `/archivo` prefix with `auth` middleware. The following sub-resources make up the GDO module:
+
+| Sub-resource | Route prefix | Model | Purpose |
+|---|---|---|---|
+| Employee records | `GET /archivo/empleados` | `GdoEmpleado` | Master registry: cedula, names, birth date, sex, address, EPS, contact info |
+| Job titles | `GET /archivo/cargos` | `GdoCargo` | Positions with salary, shift, corporate contact, and PDF function manual |
+| Organizational areas | `GET /archivo/areas` | `GdoArea` | Departments/units that cargos belong to |
+| Document types | `GET /archivo/gdotipodocumento` | `GdoTipoDocumento` | Type catalog (e.g., contract, ID copy); protected from deletion if documents exist |
+| Document categories | `GET /archivo/categorias` | `GdoCategoriaDocumento` | Groups that type sets belong to |
+| Employee documents | `GET /archivo/gdodocsempleados` | `GdoDocsEmpleados` | Individual document files linked to an employee by `cedula` |
+| Job functions | `GET /archivo/funciones` | `GdoFuncion` | Function descriptions that can be assigned to cargos |
+
+## Route Reference
+
+```
+GET    /archivo/empleados                        archivo.empleado.index
+POST   /archivo/empleados                        archivo.empleado.store
+PUT    /archivo/empleados/{empleado}             archivo.empleado.update
+DELETE /archivo/empleados/{empleado}             archivo.empleado.destroy
+GET    /archivo/empleados/{id}/foto              archivo.empleado.verFoto
+POST   /archivo/empleados/storeDocumento         archivo.empleado.storeDocumento
+GET    /archivo/empleados/verDocumento/{id}      archivo.empleado.verDocumento
+GET    /archivo/empleados/downloadDocumento/{id} archivo.empleado.downloadDocumento
+DELETE /archivo/empleados/documentos/{id}        archivo.empleado.destroyDocumento
+
+GET    /archivo/cargos                           archivo.cargo.index  (resource)
+GET    /archivo/cargos/{cargo}/ver-manual        archivo.cargo.verManual
+GET    /archivo/cargos/export-csv                archivo.cargo.export.csv
+
+GET    /archivo/areas                            archivo.area.index   (resource)
+GET    /archivo/gdotipodocumento                 archivo.gdotipodocumento.index (resource)
+GET    /archivo/categorias                       archivo.categorias.index (resource)
+GET    /archivo/funciones                        archivo.funcion.index (resource)
+POST   /archivo/funciones/asignar-cargo          archivo.funcion.asignarCargo
+PUT    /archivo/funciones/{cargo}/{funcion}/estado archivo.funcion.cambiarEstadoVinculo
+```
+
+## User–Employee Integration
+
+Each Corpen `User` account can be linked to a `GdoEmpleado` record through the `perfilEmpleado` relationship. The join key is the `nid` (national ID / cedula) column that exists on both the `users` table and `gdo_empleados`. This allows a single login to surface the employee's photo, job title, and personal details in the application UI.
+
+The `getFotoPerfilAttribute()` accessor on the `User` model calls the named route `archivo.empleado.verFoto` with the employee's ID. That controller method checks S3 for the stored path, and if found, issues a 302 redirect to a **20-minute temporary URL**. If no photo exists, a default avatar (`public/assets/media/avatars/blank.png`) is served instead.
+
+<Note>
+Profile photos are stored on the `s3` disk under the path pattern `archivo/empleados/fotos/YYYY/MM/{timestamp}_{slug}.{ext}`. Employee documents (contracts, certificates, etc.) follow the path `archivo/empleados/documentos/{cedula}/{DOC_{timestamp}_{random}.{ext}}`. When an employee is deleted, both the profile photo and all associated documents are removed from S3 before the database records are purged. Temporary view URLs expire after **15 minutes** for documents and **20 minutes** for photos.
+</Note>
+
+## Onboarding a New Employee
+
+<Steps>
+  <Step title="Create a document type (if needed)">
+    Before registering an employee, ensure the relevant document types exist. Navigate to `/archivo/gdotipodocumento/create` and submit the form with a unique `nombre` and optionally a `categoria_documento_id`. Types linked to existing documents **cannot** be deleted, so plan your taxonomy in advance.
+  </Step>
+
+  <Step title="Create the organizational area">
+    If the employee's department does not exist yet, open `/archivo/areas/create` and register it. Areas are referenced by job titles (`GdoCargo`) via the `GDO_area_id` foreign key.
+  </Step>
+
+  <Step title="Create the job title (cargo)">
+    Go to `/archivo/cargos/create`. Fill in `nombre_cargo`, `salario_base`, `jornada`, corporate contact fields (`telefono_corporativo`, `correo_corporativo`, `gmail_corporativo`), and select the area. Optionally upload a PDF function manual (`mimes:pdf`, max 5 MB); it is stored on S3 at `archivo/cargos/manuales/MANUAL_{slug}_{timestamp}.pdf`.
+
+    ```php
+    // Validation rules for GdoCargo store
+    'nombre_cargo'         => 'required|string|max:255',
+    'salario_base'         => 'nullable|numeric|min:0',
+    'manual_funciones'     => 'nullable|file|mimes:pdf|max:5120',
+    'GDO_area_id'          => 'nullable|exists:gdo_area,id',
+    ```
+  </Step>
+
+  <Step title="Register the employee">
+    Open `/archivo/empleados` and submit the registration form. Required fields are `cedula` (unique), `nombre1`, and `apellido1`. The `cedula` value is the permanent identifier used as the join key across the system.
+
+    ```php
+    // Validation rules for GdoEmpleado store
+    'cedula'           => 'required|string|max:20|unique:gdo_empleados,cedula',
+    'nombre1'          => 'required|string|max:50',
+    'apellido1'        => 'required|string|max:50',
+    'sexo'             => 'nullable|in:M,F',
+    'correo_personal'  => 'nullable|email|max:100',
+    'ubicacion_foto'   => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+    'cargo_id'         => 'nullable|exists:gdo_cargos,id',
+    ```
+
+    After successful creation, the controller redirects to `archivo.empleado.index?id={employee_id}` to display the new employee's detail panel automatically.
+  </Step>
+
+  <Step title="Upload an employee document">
+    From the employee detail panel, use the document upload form. The endpoint is `POST /archivo/empleados/storeDocumento`. Attach the file (PDF, JPG, PNG, or DOCX; max 5 MB), select the `tipo_documento_id`, and set a `fecha_subida`.
+
+    ```php
+    // Validation rules for storeDocumento
+    'empleado_id'       => 'required|exists:gdo_empleados,cedula',
+    'tipo_documento_id' => 'required|exists:gdo_tipo_documento,id',
+    'fecha_subida'      => 'required|date',
+    'archivo'           => 'required|file|mimes:pdf,jpg,jpeg,png,docx|max:5120',
+    ```
+
+    The file is stored at `archivo/empleados/documentos/{cedula}/DOC_{timestamp}_{random}.{ext}` on S3. A success JSON response is returned; errors are logged via `Log::error()` and a generic 500 response is sent to the client.
+  </Step>
+
+  <Step title="View or download a document">
+    To view a document inline, call `GET /archivo/empleados/verDocumento/{id}`. This generates a temporary S3 URL with `ResponseContentType: application/pdf` and `ResponseContentDisposition: inline`, valid for 15 minutes.
+
+    To force a download with a descriptive filename (e.g., `contrato_juan-perez.pdf`), call `GET /archivo/empleados/downloadDocumento/{id}`. The filename is built from `{tipo_documento}_{nombre_completo}`.
+  </Step>
+</Steps>
+
+## Job Title CSV Export
+
+The `GdoCargoController::exportCsv()` method streams a UTF-8 BOM CSV (Excel-safe) with columns `ID`, `CARGO`, `AREA`, `COLABORADOR`, `CEDULA`, and `ESTADO`. The export respects the same `search` query parameter used by the index view, so the download always reflects the current filtered list.
+
+```
+GET /archivo/cargos/export-csv?search=gerencia   →   archivo.cargo.export.csv
+```
+
+## Document Type Integrity Protection
+
+`GdoTipoDocumento::destroy()` checks `$tipoDocumento->documentos()->exists()` before deletion. If any physical `GdoDocsEmpleados` records reference the type, the delete is rejected and the user is redirected with an error message. This prevents orphaned document records in the archive.

@@ -1,0 +1,185 @@
+---
+title: "Accounting Module: Bank Accounts and Statement Reconciliation"
+sidebarTitle: "Accounting"
+description: "Manage bank accounts, import bank statements via Excel, and reconcile transactions in Corpen's Contabilidad module."
+---
+
+The Accounting module (`/contabilidad`) is the financial backbone of Corpen. It provides a full lifecycle for bank account administration, statement ingestion, and transaction reconciliation against portfolio payment vouchers. All routes in this module are protected by the `auth` middleware and an additional `check.mantenimiento` guard — while maintenance mode is active, the module rejects new requests until the system administrator re-enables access.
+
+## Sub-resources at a glance
+
+| Route segment | Controller | Purpose |
+|---|---|---|
+| `contabilidad/cuentas-bancarias` | `ConCuentaBancariaController` | Bank account CRUD |
+| `contabilidad/extractos` | `ConExtractoTransaccionController` | Statement transaction CRUD |
+| `contabilidad/extractos/plantilla` | `ConExtractoTransaccionController@descargarPlantilla` | Download the import template |
+| `contabilidad/extractos/importar` | `ConExtractoTransaccionController@importar` | Import form (Step 1) |
+| `contabilidad/extractos/procesar-importacion` | `ConExtractoTransaccionController@procesarImportacion` | Preview uploaded file (Step 2) |
+| `contabilidad/extractos/confirmar-importacion` | `ConExtractoTransaccionController@confirmarImportacion` | Bulk-insert confirmed rows (Step 3) |
+| `contabilidad/extractos/conciliacion` | `ConExtractoTransaccionController@conciliacion` | Side-by-side reconciliation view |
+| `contabilidad/extractos/conciliacion-automatica` | `ConExtractoTransaccionController@conciliacionAutomatica` | Hash-based auto-reconciliation |
+| `contabilidad/extractos/conciliacion-manual` | `ConExtractoTransaccionController@conciliacionManual` | Manual link via AJAX modal |
+| `contabilidad/extractos-buscar-modal` | `ConExtractoTransaccionController@buscarModalApi` | Modal search API |
+| `contabilidad/sincronizar` | `ExcelSyncController@index` | Master sync panel |
+| `contabilidad/descargar-excel` | `ExcelSyncController@descargarExcel` | Bulk download to `.xlsx` |
+| `contabilidad/subir-excel` | `ExcelSyncController@subirExcel` | Upload & preview for Upsert (Step 1) |
+| `contabilidad/confirmar-sincronizacion` | `ExcelSyncController@confirmarSincronizacion` | Commit Upsert (Step 2) |
+| `contabilidad/mantenimiento` | `ConExtractoTransaccionController@mantenimiento` | Maintenance mode panel |
+
+---
+
+## Bank Accounts (`cuentas-bancarias`)
+
+Bank accounts are the root entities that all statement transactions reference. The `ConCuentaBancaria` model is stored in the `con_cuentas_bancarias` table.
+
+### Creating a bank account
+
+Navigate to `GET /contabilidad/cuentas-bancarias/create` and submit the following fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| `banco` | string | Name of the financial institution |
+| `numero_cuenta` | string (max 200) | Must be unique across all accounts |
+| `tipo_cuenta` | string (max 45) | e.g. `Ahorros`, `Corriente` |
+| `num_siasoft` | integer | Corresponding code in the Siasoft accounting system |
+| `estado` | string (max 45) | e.g. `Activa`, `Inactiva` |
+| `convenios` | string (nullable, max 45) | Optional agreement code |
+| `id_user` | integer | Owning user ID |
+
+On success, the controller redirects to the index with the flash message: *"¡Cuenta bancaria creada con éxito!"*
+
+<Warning>
+  The `numero_cuenta` field is enforced as unique at both the validation layer and the database level. Attempting to create a duplicate account number will result in a validation error before any record is written.
+</Warning>
+
+Only accounts whose `estado` is `Activa` are returned to the import and reconciliation dropdowns.
+
+---
+
+## Statement Transactions (`extractos`)
+
+The `con_extractos_transacciones` table stores every individual bank movement. Each row carries a `hash_transaccion` (format: `{id_cuenta}-{YmdHis}-{valor_ingreso}-{referencia_cedula}`) that serves as a deduplication key throughout the import and reconciliation workflows.
+
+**Reconciliation states** (enum column `estado_conciliacion`):
+
+| Value | Meaning |
+|---|---|
+| `Pendiente` | Newly imported, awaiting matching |
+| `Conciliado_Auto` | Matched automatically by hash comparison |
+| `Conciliado_Manual` | Linked manually via the reconciliation modal |
+| `Anulado` | Voided by an operator |
+
+---
+
+## Statement Import Workflow
+
+<Steps>
+  <Step title="Download the template">
+    Call `GET /contabilidad/extractos/plantilla` to receive `plantilla_importacion.xlsx`. The file contains four columns with bold headers: **Fecha**, **Cedula**, **Valor**, **Oficina**. Two example rows are pre-filled so the format is immediately clear.
+
+    ```http
+    GET /contabilidad/extractos/plantilla
+    ```
+  </Step>
+
+  <Step title="Fill and upload the file">
+    Navigate to `GET /contabilidad/extractos/importar`, select the target bank account from the dropdown (only `Activa` accounts appear), and attach your completed `.xlsx` or `.csv` file. The server validates:
+
+    ```
+    id_con_cuentas_bancaria: required, exists in con_cuentas_bancarias
+    archivo_extracto: required, mimes: csv/txt/xls/xlsx, max 5 120 KB
+    ```
+
+    Submit via `POST /contabilidad/extractos/procesar-importacion`. The controller parses every data row, converts Excel serial dates to `Y-m-d H:i:s`, calculates each row's hash, and flags duplicates — both against the existing database rows **and** against earlier rows within the same file.
+  </Step>
+
+  <Step title="Review and confirm">
+    The controller renders the `contabilidad.extractos.validar` view with a preview table. Rows flagged as `es_duplicado: true` are highlighted so you can deselect them before confirming. When ready, submit `POST /contabilidad/extractos/confirmar-importacion`.
+
+    The confirmation step performs a Bulk Insert in batches of 1 000 rows for performance:
+
+    ```php
+    // All new records are inserted in chunks of 1,000
+    $chunks = array_chunk($dataParaInsertar, 1000);
+    foreach ($chunks as $chunk) {
+        DB::table('con_extractos_transacciones')->insert($chunk);
+    }
+    ```
+
+    On completion a session flash reports the count of new rows and, if any were skipped, the first 100 duplicate details.
+  </Step>
+</Steps>
+
+---
+
+## Excel Master Sync (`sincronizar`)
+
+The **AWS Master Sync** panel (`GET /contabilidad/sincronizar`) is designed for large-scale re-synchronisations — for instance, after an external data migration. It reads up to 60 MB Excel files, detects duplicates with an `O(1)` in-memory hash lookup, and uses `Upsert` (insert-or-update) instead of plain inserts so existing rows are updated in place.
+
+<Steps>
+  <Step title="Download current database">
+    `GET /contabilidad/descargar-excel` streams the entire `con_extractos_transacciones` table as `Data_Transacciones.xlsx` via the `TransaccionesExport` class.
+  </Step>
+
+  <Step title="Upload the modified file">
+    `POST /contabilidad/subir-excel` reads the file (up to 60 MB), calculates hashes, and presents a preview at `contabilidad.extractos.sincronizar`. The server sets `memory_limit` to `2 048 MB` and `max_execution_time` to 600 seconds to handle the load.
+  </Step>
+
+  <Step title="Confirm the Upsert">
+    `POST /contabilidad/confirmar-sincronizacion` wraps the entire operation in a database transaction and processes the JSON payload in batches of 1 000, using `ConExtractoTransaccion::upsert()` on the `id_transaccion` key.
+  </Step>
+</Steps>
+
+<Note>
+  If the preview page is refreshed (F5) or the session expires between Step 2 and Step 3, a `GET /contabilidad/subir-excel` guard redirects back to the sync panel with a friendly message: *"La página de previsualización expiró o fue recargada. Por favor, selecciona y sube el archivo de nuevo."*
+</Note>
+
+---
+
+## Reconciliation (`extractos/conciliacion`)
+
+The conciliation view renders a **side-by-side table**: pending bank transactions on the left and unreconciled portfolio payment vouchers (`CarComprobantePago` where `estado != 'conciliado'`) on the right. Both sides support the same filter set — period (`periodo`, `Y-m`), account (`banco_id`), and free text (`search`). Activating the **Global Tracking** switch (`is_global`) removes the month filter and searches the full history.
+
+<Note>
+  The conciliation view bridges two modules: Accounting (`con_extractos_transacciones`) and Portfolio (`car_comprobantes_pagos`). A transaction on the left is considered matched when its `hash_transaccion` aligns with the `hash_transaccion` of a payment voucher on the right, or when an operator links them manually using the **AJAX modal**. Successful matches update the extract's `estado_conciliacion` to either `Conciliado_Auto` or `Conciliado_Manual` and set the voucher's `estado` to `conciliado`.
+</Note>
+
+### Modal search API
+
+`GET /contabilidad/extractos-buscar-modal?search={term}` returns a JSON object with two keys:
+
+```json
+{
+  "bancos": [
+    {
+      "id": 42,
+      "fecha": "12/05/2025",
+      "oficina": "Oficina Central",
+      "banco": "Bancolombia",
+      "valor": "150.000"
+    }
+  ],
+  "cartera": [
+    {
+      "id": 18,
+      "fecha": "12/05/2025",
+      "obligacion": "Crédito Vivienda",
+      "cuota": 3,
+      "valor": "150.000",
+      "url_archivo": "https://..."
+    }
+  ]
+}
+```
+
+The search term is matched against `hash_transaccion`, `referencia_cedula`, and `valor_ingreso` on the bank side, and against `cod_ter_MaeTerceros`, `monto_pagado`, and `ruta_archivo` on the portfolio side. Each side returns up to 50 results.
+
+---
+
+## Maintenance Mode
+
+`GET /contabilidad/mantenimiento` displays the maintenance panel. The on/off toggle calls `POST /contabilidad/mantenimiento/toggle` with `{ "estado": true|false }` and stores the flag in the application cache via `Cache::forever('contabilidad_mantenimiento_active', ...)`. The `check.mantenimiento` middleware reads this flag before processing any other request in the module.
+
+<Warning>
+  Enabling maintenance mode blocks **all** accounting routes for every user. Ensure this is done during off-peak hours and that the flag is turned off promptly after the maintenance window ends.
+</Warning>

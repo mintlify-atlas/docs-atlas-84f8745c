@@ -1,0 +1,149 @@
+---
+title: "Demographics Module: Geographic Data and Member Distribution"
+sidebarTitle: "Demographics"
+description: "Manage geographic and demographic data for cooperative members, sync records via Excel, and view distribution dashboards in Corpen's Demografía module."
+---
+
+The Demografía module manages the full geographic hierarchy used across the cooperative — countries, regions, sub-regions, cities, and addresses. Rather than editing each record by hand, the module provides a bulk Excel synchronization workflow: administrators download the current database as a multi-sheet workbook, fill in or update records following the sheet structure, upload the file, and confirm the import to execute a transactional upsert across all geographic layers. A live dashboard shows KPI counts for each level of the hierarchy.
+
+## Routes
+
+All demographics routes are grouped under the `/demograficos` prefix with the `auth` middleware, and named with the `demograficos.` prefix.
+
+| Method | URI | Controller Action | Route Name |
+|--------|-----|-------------------|------------|
+| GET | `/demograficos/tablero` | `DemografiaController@dashboard` | `demograficos.dashboard` |
+| GET | `/demograficos/sincronizar` | `DemografiaController@excelIndex` | `demograficos.sincronizar.index` |
+| GET | `/demograficos/descargar-excel` | `DemografiaController@descargarExcel` | `demograficos.sincronizar.descargar` |
+| POST | `/demograficos/subir-excel` | `DemografiaController@subirExcel` | `demograficos.sincronizar.subir` |
+| POST | `/demograficos/confirmar-sincronizacion` | `DemografiaController@confirmarSincronizacion` | `demograficos.sincronizar.confirmar` |
+| GET | `/demograficos/maestro` | `DemografiaController@index` | `demograficos.maestro.index` |
+| GET | `/demograficos/maestro/create` | `DemografiaController@create` | `demograficos.maestro.create` |
+| POST | `/demograficos/maestro` | `DemografiaController@store` | `demograficos.maestro.store` |
+| GET | `/demograficos/maestro/{demografia}` | `DemografiaController@show` | `demograficos.maestro.show` |
+| GET | `/demograficos/maestro/{demografia}/edit` | `DemografiaController@edit` | `demograficos.maestro.edit` |
+| PUT/PATCH | `/demograficos/maestro/{demografia}` | `DemografiaController@update` | `demograficos.maestro.update` |
+| DELETE | `/demograficos/maestro/{demografia}` | `DemografiaController@destroy` | `demograficos.maestro.destroy` |
+
+The `resource` route for the maestro CRUD uses the parameter binding `['maestro' => 'demografia']`, so the route parameter in the URL segment is `{demografia}`.
+
+---
+
+## Dashboard (`/demograficos/tablero`)
+
+The dashboard aggregates live record counts from the four core geographic models and passes them to the `demograficos.dashboard` view:
+
+| Variable | Model | Description |
+|----------|-------|-------------|
+| `$totalPaises` | `App\Models\Demografia\Pais` | Total registered countries |
+| `$totalRegiones` | `App\Models\Demografia\Region` | Total regions / departments |
+| `$totalCiudades` | `App\Models\Demografia\Ciudad` | Total municipalities / cities |
+| `$totalDirecciones` | `App\Models\Demografia\Direccion` | Total member address records |
+
+---
+
+## Excel Sync Workflow
+
+The bulk synchronization flow is the primary way to load or update geographic data at scale. It follows a two-step upload-then-confirm pattern to give administrators a chance to review what they are about to import before it touches the database.
+
+<Steps>
+  <Step title="Download the Current Database as Excel">
+    Navigate to **Demografía → Sincronizar** (`/demograficos/sincronizar`) and click the download button. This calls `DemografiaController@descargarExcel`, which triggers the `DemografiaExport` class and streams a file named `demografia_maestra.xlsx`:
+
+    ```
+    GET /demograficos/descargar-excel
+    ```
+
+    The exported workbook contains five sheets — one for each geographic level. Use this file as your editing template to ensure the column structure and sheet names match exactly what the importer expects.
+  </Step>
+
+  <Step title="Fill In or Update the Spreadsheet">
+    Open `demografia_maestra.xlsx` and edit the relevant sheets. Each sheet corresponds to one geographic model:
+
+    | Sheet Name | Model | Geographic Level |
+    |------------|-------|-----------------|
+    | `Paises` | `Pais` | Countries |
+    | `Regiones` | `Region` | Regions / Departments |
+    | `Subregiones` | `Subregion` | Sub-regions / Provinces |
+    | `Ciudades` | `Ciudad` | Municipalities / Cities |
+    | `Direcciones` | `Direccion` | Member address records |
+
+    You may edit one or several sheets in the same file. The importer processes all five sheets in order on every run.
+  </Step>
+
+  <Step title="Upload the File">
+    From the `/demograficos/sincronizar` panel, select your completed `.xlsx` or `.xls` file (maximum 10 MB) and submit the upload form:
+
+    ```
+    POST /demograficos/subir-excel
+    ```
+
+    The controller validates the file type and size, stores the file temporarily in the `imports/` local storage directory, and saves its path in the session under the key `excel_demografia_path`. You will see a warning notice confirming the file is staged and ready to confirm.
+
+    <Warning>
+      At this point, **no data has been written to the database**. The upload step only stages the file. You must complete the confirmation step below to execute the import.
+    </Warning>
+  </Step>
+
+  <Step title="Confirm the Synchronization">
+    After reviewing the upload confirmation message, click the confirm button on the sync panel:
+
+    ```
+    POST /demograficos/confirmar-sincronizacion
+    ```
+
+    The controller reads the staged file path from the session, invokes `Excel::import(new DemografiaImport(), $path)`, then deletes the temporary file and clears the session key. On success you will see the message *"¡Sincronización masiva completada con éxito!"*
+
+    If an exception occurs during the database write, the temporary file is **not** deleted so the import can be retried without re-uploading. The error message displayed in the panel will include the underlying exception text to assist in diagnosing data issues.
+  </Step>
+</Steps>
+
+<Note>
+  The Excel file must contain sheet tabs named exactly **`Paises`**, **`Regiones`**, **`Subregiones`**, **`Ciudades`**, and **`Direcciones`** for the `DemografiaImport` class to route each sheet to the correct import handler. Sheet names are case-sensitive. Tabs with different names will be ignored silently. Use the file downloaded from `/demograficos/descargar-excel` as your template to guarantee the correct structure.
+</Note>
+
+---
+
+## Master CRUD (`/demograficos/maestro`)
+
+For one-off additions or corrections, the maestro section provides a standard resource interface. The `index` action paginates countries 10 per page and includes a count of associated regions via `withCount('regiones')`:
+
+```php
+$paises = Pais::withCount('regiones')->paginate(10);
+```
+
+The `show` action loads a country with all its nested regions eager-loaded:
+
+```php
+$pais = Pais::with('regiones')->findOrFail($id);
+```
+
+---
+
+## Geographic Models
+
+The module uses five Eloquent models located in `App\Models\Demografia`:
+
+<CardGroup cols={2}>
+  <Card title="Pais" icon="globe">
+    Top-level geographic entity. Has many `Region` records. The maestro index paginates by `Pais` with a region count.
+  </Card>
+  <Card title="Region" icon="map">
+    Departments or states within a country. Belongs to `Pais`, has many `Subregion` records.
+  </Card>
+  <Card title="Subregion" icon="map-pin">
+    Provinces or sub-regions within a department. Belongs to `Region`, has many `Ciudad` records.
+  </Card>
+  <Card title="Ciudad" icon="building">
+    Municipalities and cities. Belongs to `Subregion`, referenced by `Direccion` records.
+  </Card>
+  <Card title="Direccion" icon="location-dot">
+    Individual member address records linked to a `Ciudad`. Represents the lowest geographic level in the hierarchy.
+  </Card>
+</CardGroup>
+
+---
+
+<Tip>
+  Before running a bulk synchronization in production, download a fresh export from `/demograficos/descargar-excel` to get a snapshot of the current state. Keep the downloaded file as a rollback reference — if the import produces unexpected results, you can re-upload the original snapshot and confirm again to restore the previous data.
+</Tip>

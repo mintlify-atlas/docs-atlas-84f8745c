@@ -1,0 +1,131 @@
+---
+title: "Collections Module: Payment Receipt and Accounting Imputation"
+sidebarTitle: "Collections"
+description: "Record member payment receipts, apply accounting imputations, and track collection history in Corpen's Recaudo module."
+---
+
+The Collections module (`/recaudo`) handles the incoming cash flow of the cooperative: recording payment receipts from members (`PagoRecaudo`) and creating the corresponding accounting imputations (`RecImputacionContable`) that link each bank-statement transaction to a third party and a district. Every route in the module is protected by the `auth` middleware.
+
+The module sits between the Accounting module (which owns the source bank transactions in `con_extractos_transacciones`) and the Portfolio module (which tracks receivables per obligation). An imputation is the formal record that a transaction recorded in the bank statement has been attributed to a specific member, closing the loop between cash received and the accounting ledger.
+
+---
+
+## Route reference
+
+| Method | URL | Route name | Handler | Description |
+|---|---|---|---|---|
+| `GET` | `/recaudo/imputaciones` | `recaudo.imputaciones.index` | `RecImputacionContableController@index` | Paginated list with live-search |
+| `GET` | `/recaudo/imputaciones/create` | `recaudo.imputaciones.create` | `RecImputacionContableController@create` | Create form |
+| `POST` | `/recaudo/imputaciones` | `recaudo.imputaciones.store` | `RecImputacionContableController@store` | Persist new imputation |
+| `GET` | `/recaudo/imputaciones/{id}` | `recaudo.imputaciones.show` | `RecImputacionContableController@show` | Audit detail |
+| `GET` | `/recaudo/imputaciones/{id}/edit` | `recaudo.imputaciones.edit` | `RecImputacionContableController@edit` | Edit form |
+| `PUT` | `/recaudo/imputaciones/{id}` | `recaudo.imputaciones.update` | `RecImputacionContableController@update` | Update record |
+| `DELETE` | `/recaudo/imputaciones/{id}` | `recaudo.imputaciones.destroy` | `RecImputacionContableController@destroy` | Delete record |
+| `GET` | `/recaudo/buscar-distrito/{terceroId}` | `recaudo.buscar-distrito` | `RecImputacionContableController@buscarDistrito` | AJAX: resolve district code |
+
+Payments registered via `PagoRecaudoController` use the route name `pagos.index` and are accessed under the same `/recaudo` context.
+
+---
+
+## Payment receipts (`PagoRecaudo`)
+
+The `rec_pagos` table stores each instalment collected from a member.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint (PK) | Auto-increment |
+| `cuota` | integer | Instalment number |
+| `valor_pagado` | decimal (15,2) | Amount received |
+| `rc` | string (unique) | Cash receipt number |
+| `comprobante` | string (nullable) | Path to supporting file |
+| `cre_creditos_id` | FK → `cre_creditos` | Parent credit |
+| `created_at` / `updated_at` | timestamps | |
+
+The `PagoRecaudo` model belongs to a `Credito`, so every payment receipt is always traceable to the originating loan record.
+
+---
+
+## Accounting imputations (`RecImputacionContable`)
+
+The `rec_imputaciones_contables` table creates the formal link between a bank transaction and Corpen's accounting ledger entries.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint (PK) | Auto-increment |
+| `id_transaccion` | FK → `con_extractos_transacciones.id_transaccion` | Source bank movement |
+| `id_tercero_origen` | FK → `MaeTerceros.cod_ter` | Payer |
+| `id_distrito` | FK → `MaeDistritos.COD_DIST` | District of the payer |
+| `id_recibo` | bigint (unique) | Receipt identifier |
+| `tipo` | string | Imputation type |
+| `concepto_contable` | text | Accounting concept (e.g. `L.I MENORES`, `CTA 14 DIC`) |
+| `valor_imputado` | integer | Amount attributed |
+| `link_ecm` | text (nullable, URL) | ECM document management link |
+| `estado_conciliacion` | enum | `Pendiente`, `Conciliado_Auto`, `Conciliado_Manual`, `Anulado` |
+| `id_user` | FK → `users` | Authenticated user who created the record |
+
+The list view (`index`) supports three simultaneous filters:
+
+- **Live search** (`search`): matches `id_recibo`, `concepto_contable`, or `id_tercero_origen`.
+- **Reconciliation state** (`estado_conciliacion`): exact enum match.
+- **Type** (`tipo`): free text match.
+
+The index also supports AJAX fragment refreshes: when the `X-Requested-With: XMLHttpRequest` header is present, the controller returns only the `imputaciones-list` Livewire fragment, enabling real-time table updates without a full page reload.
+
+---
+
+## Recording a collection payment
+
+<Steps>
+  <Step title="Identify the bank transaction">
+    Open the Accounting module's statement list at `GET /contabilidad/extractos` and locate the target transaction. Copy its `id_transaccion` value. Alternatively, navigate directly to `GET /recaudo/imputaciones/create?id_transaccion={id}` — the controller will pre-fill the `ConExtractoTransaccion` data onto the form automatically.
+  </Step>
+
+  <Step title="Look up the payer's district">
+    On the create form, once the `id_tercero_origen` field is populated (the member's `cod_ter`), the UI calls the AJAX helper:
+
+    ```http
+    GET /recaudo/buscar-distrito/{terceroId}
+    ```
+
+    The response returns the member's `cod_dist` from the `MaeTerceros` master table, which pre-fills the district dropdown:
+
+    ```json
+    { "cod_dist": "BOG01" }
+    ```
+  </Step>
+
+  <Step title="Complete and submit the imputation form">
+    Fill in the remaining fields and submit `POST /recaudo/imputaciones`:
+
+    ```
+    id_transaccion      required | exists:con_extractos_transacciones,id_transaccion
+    id_tercero_origen   required | exists:MaeTerceros,cod_ter
+    id_distrito         required | exists:MaeDistritos,COD_DIST
+    id_recibo           required | unique:rec_imputaciones_contables,id_recibo
+    tipo                required | string (max 255)
+    concepto_contable   required | string (max 1000)
+    valor_imputado      required | numeric (min 0)
+    link_ecm            nullable | URL
+    estado_conciliacion required | in: Pendiente, Conciliado_Auto, Conciliado_Manual, Anulado
+    ```
+
+    The `id_user` field is injected automatically from the authenticated session — it is never exposed in the form.
+  </Step>
+
+  <Step title="Verify the audit record">
+    After a successful `store`, the controller wraps the insert in a database transaction (`DB::beginTransaction` / `DB::commit`). Navigate to `GET /recaudo/imputaciones/{id}` to view the full audit record, which eager-loads the nested chain: imputation → bank transaction → bank account, plus the linked third party, district, and creating user.
+  </Step>
+</Steps>
+
+<Note>
+  The `show` view loads the full relationship chain (`transaccion.cuentaBancaria`, `tercero`, `distrito`, `user`) in a single Eager Loading call, providing a complete audit ficha without additional queries.
+</Note>
+
+---
+
+## Relationship with other modules
+
+The Collections module depends on entities owned by two other modules:
+
+- **Accounting** — every `RecImputacionContable` must reference a valid `con_extractos_transacciones` row. The imputation's `estado_conciliacion` mirrors the reconciliation lifecycle defined in the Accounting module.
+- **Portfolio** — payment receipts (`rec_pagos`) belong to a `cre_creditos` record. Payments recorded here eventually feed the portfolio's outstanding balance calculations and can be matched to portfolio payment vouchers during the conciliation process.

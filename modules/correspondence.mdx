@@ -1,0 +1,223 @@
+---
+title: "Correspondence Module: Document Workflows and Tracking"
+sidebarTitle: "Correspondence"
+description: "Manage inbound and outbound correspondence, document retention tables (TRDs), workflow processes, notifications, and PDF generation in Corpen."
+---
+
+The Correspondencia module is Corpen's document routing and tracking engine. It handles the full lifecycle of both inbound documents (radicados) and outbound official communications (oficios de salida), organized around configurable workflow processes and document retention rules. Every action in the module—creating a radicado, assigning a process, closing a file—is written to a persistent audit trail. The module is accessible under `/correspondencia` and requires the `auth` middleware on all routes.
+
+## Sub-resource Overview
+
+| Route prefix | Resource | Purpose |
+|---|---|---|
+| `correspondencias` | `CorrespondenciaController` | Inbound correspondence CRUD (radicados) |
+| `comunicaciones-salida` | `ComunicacionSalidaController` | Outbound official communications with auto folio generation |
+| `trds` | `TrdController` | Document retention table (Tabla de Retención Documental) entries |
+| `plantillas` | `PlantillaController` | Letter/document templates |
+| `flujos` | `FlujoDeTrabajoController` | Workflow definitions (groupings for processes) |
+| `procesos` | `ProcesoController` | Process steps within a workflow; user assignments; state permissions |
+| `notificaciones` | `NotificacionController` | Notification records with read-marking |
+| `estados` | `CorrEstadoController` | State master data for correspondence records |
+| `medios-recepcion` | `MedioRecepcionController` | Reception media types (e.g., email, physical mail) |
+| `correspondencias-procesos` | `CorrespondenciaProcesoController` | Process tracking history per radicado with `marcarNotificado` |
+| `tablero` | `CorrespondenciaController::tablero` | KPI dashboard: total, overdue, pending, finalized |
+
+## Full Route Reference
+
+```
+# Dashboard
+GET  /correspondencia/tablero                                     correspondencia.tablero
+GET  /correspondencia/tablero/pdf                                 correspondencia.tablero.pdf
+
+# Inbound Correspondence
+GET    /correspondencia/correspondencias                          correspondencia.correspondencias.index
+GET    /correspondencia/correspondencias/create                   correspondencia.correspondencias.create
+POST   /correspondencia/correspondencias                          correspondencia.correspondencias.store
+GET    /correspondencia/correspondencias/{id}                     correspondencia.correspondencias.show
+GET    /correspondencia/correspondencias/{id}/edit                correspondencia.correspondencias.edit
+PUT    /correspondencia/correspondencias/{id}                     correspondencia.correspondencias.update
+DELETE /correspondencia/correspondencias/{id}                     correspondencia.correspondencias.destroy
+GET    /correspondencia/correspondencias/{id}/historial-pdf       correspondencia.correspondencias.historialPdf
+
+# AJAX Endpoints
+GET  /correspondencia/ajax/trds-por-flujo/{flujo_id}             correspondencia.ajax.trds.flujo
+GET  /correspondencia/ajax/remitente-por-codigo/{cod_ter}        correspondencia.ajax.remitente.codigo
+
+# Outbound Communications
+GET    /correspondencia/comunicaciones-salida                     correspondencia.comunicaciones-salida.index
+POST   /correspondencia/comunicaciones-salida                     correspondencia.comunicaciones-salida.store
+GET    /correspondencia/comunicaciones-salida/{id}                correspondencia.comunicaciones-salida.show
+PUT    /correspondencia/comunicaciones-salida/{id}                correspondencia.comunicaciones-salida.update
+DELETE /correspondencia/comunicaciones-salida/{id}                correspondencia.comunicaciones-salida.destroy
+GET    /correspondencia/comunicaciones-salida/{id}/descargar-pdf  correspondencia.comunicaciones-salida.descargarPdf
+
+# TRD
+GET  /correspondencia/trds                                        correspondencia.trds.index  (resource)
+
+# Workflow Processes
+POST   /correspondencia/procesos/bulk                             correspondencia.procesos.bulk
+GET    /correspondencia/procesos                                  correspondencia.procesos.index (resource)
+POST   /correspondencia/procesos/{proceso}/asignar-usuario        correspondencia.procesos.asignarUsuario
+DELETE /correspondencia/procesos/{proceso}/remover-usuario/{uid}  correspondencia.procesos.removerUsuario
+POST   /correspondencia/procesos/{proceso}/guardar-estado         correspondencia.procesos.guardarEstado
+DELETE /correspondencia/procesos/estado/{id}                      correspondencia.procesos.eliminarEstado
+GET    /correspondencia/ajax/usuarios-proceso/{proceso_id}        correspondencia.ajax.usuarios.proceso
+
+# Notifications
+POST /correspondencia/notificaciones/{id}/marcar-leida            correspondencia.notificaciones.marcarLeida
+
+# Tracking
+POST /correspondencia/correspondencias-procesos/{id}/marcar-notificado  correspondencia.correspondencias-procesos.marcarNotificado
+```
+
+## Database Tables
+
+The module uses the following tables, all prefixed with `corr_`:
+
+| Table | Purpose |
+|---|---|
+| `corr_correspondencia` | Inbound radicado records |
+| `corr_comunicaciones_salida` | Outbound oficios |
+| `corr_trd` | Retention table entries |
+| `corr_flujo_de_trabajo` | Workflow definitions |
+| `corr_procesos` | Process steps |
+| `corr_procesos_users` | User–process assignments (pivot) |
+| `corr_estados` | State catalog |
+| `corr_estados_procesos` | State permissions per process |
+| `corr_plantillas` | Document templates |
+| `corr_notificaciones` | Notification records |
+| `corr_medio_recepcion` | Reception media types |
+| `corr_correspondencia_proceso` | Per-radicado process tracking history |
+
+## Inbound Correspondence Handling Workflow
+
+<Steps>
+  <Step title="Create the radicado">
+    Navigate to `GET /correspondencia/correspondencias/create`. The form auto-populates the next `id_radicado` by incrementing the current maximum. Fill in the required fields and submit.
+
+    ```php
+    // Validation rules for correspondence store
+    'id_radicado'       => 'required|string|unique:corr_correspondencia,id_radicado',
+    'fecha_solicitud'   => 'required|date',
+    'asunto'            => 'required|string|max:500',
+    'medio_recibido'    => 'required|exists:corr_medio_recepcion,id',
+    'remitente_id'      => 'required',
+    'trd_id'            => 'required',
+    'flujo_id'          => 'required',
+    'estado_id'         => 'required',
+    'documento_arc'     => 'nullable|file|mimes:pdf,doc,docx,jpg,jpeg,png|max:51200',
+    ```
+
+    The attached file (up to 50 MB) is stored on S3 at `corpentunida/correspondencia/rad{id_radicado}_{timestamp}.{ext}`. The path is stored as a JSON array in `documento_arc`, enabling multiple file accumulation on subsequent edits.
+  </Step>
+
+  <Step title="Review TRD deadline">
+    Open the radicado's detail view at `GET /correspondencia/correspondencias/{id}`. The view calculates the retention deadline using `Carbon::parse($correspondencia->fecha_solicitud)->addYears($trd->tiempo_gestion)` and displays the remaining interval. Use the AJAX endpoint `GET /correspondencia/ajax/trds-por-flujo/{flujo_id}` to load available TRDs dynamically when the flujo selector changes.
+  </Step>
+
+  <Step title="Assign to a workflow process">
+    From the detail view, select one of the available `Proceso` steps associated with the radicado's workflow. The process panel loads user assignments and permitted states from `corr_procesos_users` and `corr_estados_procesos`.
+  </Step>
+
+  <Step title="Add process tracking entry">
+    Create a `correspondencias-procesos` record to document the action taken. After creation, call `POST /correspondencia/correspondencias-procesos/{id}/marcar-notificado` to flag the entry as notified.
+  </Step>
+
+  <Step title="Add files on update">
+    Editing a radicado (`PUT /correspondencia/correspondencias/{id}`) appends new attachments to the existing JSON array without overwriting history. The `finalizado` boolean flag closes the record; the audit message is updated to `FIN CORRESPONDENCIA ID {radicado}`.
+  </Step>
+
+  <Step title="Generate the history PDF">
+    Call `GET /correspondencia/correspondencias/{id}/historial-pdf` to stream a DomPDF-generated document with the full process history, user names, and reception details for the radicado.
+  </Step>
+</Steps>
+
+## Outbound Communications and PDF
+
+<Note>
+The outbound communication PDF is rendered as an **interactive web preview** (not a forced download). `ComunicacionSalidaController::descargarPdf()` loads a background JPEG (`resources/views/correspondencia/comunicaciones_salida/fondo_de_pdf.jpg`) and the signer's digital signature image from S3, both converted to Base64 strings before being passed to the Blade view. This avoids CORS issues when rendering external images in the browser. If S3 is unreachable, the preview renders without the signature rather than returning a 500 error.
+</Note>
+
+When creating an outbound communication at `POST /correspondencia/comunicaciones-salida`, the controller auto-generates the folio number in the format `OF-{YYYY}-{XXXX}` by padding the next sequential ID:
+
+```php
+$anioActual = date('Y');
+$ultimoId = ComunicacionSalida::max('id_respuesta') ?? 0;
+$nuevoConsecutivo = str_pad($ultimoId + 1, 4, '0', STR_PAD_LEFT);
+$data['nro_oficio_salida'] = "OF-{$anioActual}-{$nuevoConsecutivo}";
+```
+
+Valid `estado_envio` values are: `Generado`, `Enviado por Email`, `Notificado Físicamente`.
+
+The digital signature image is stored on S3 at the `firmas/` path. Only radicados that do **not** already have an associated `ComunicacionSalida` record are shown in the creation form's select.
+
+## Document Retention Tables (TRD)
+
+Each TRD entry maps a `serie_documental` (documentary series) to a `flujo_id` and defines two retention periods:
+
+```php
+// Validation rules for TRD store
+'serie_documental'  => 'required|string|max:100',
+'tiempo_gestion'    => 'required|integer|min:0',   // active retention in years
+'tiempo_central'    => 'required|integer|min:0',   // central archive retention in years
+'disposicion_final' => 'required|in:conservar,eliminar',
+'usuario_id'        => 'required|exists:users,id',
+'fk_flujo'          => 'required|exists:corr_flujo_de_trabajo,id',
+```
+
+When viewing a radicado's detail, the time remaining before the `tiempo_gestion` deadline is computed via `CarbonInterval::instance(now()->diff($limite))` and surfaced in the UI.
+
+## Process Management
+
+Processes are the individual workflow steps that route correspondence. Each `Proceso` belongs to a `FlujoDeTrabajo`, has a `tiempo_respuesta_dias` field, and supports both user assignment and state permissions.
+
+<Tabs>
+  <Tab title="Assign a user">
+    ```
+    POST /correspondencia/procesos/{proceso}/asignar-usuario
+    Body: { user_id: required|exists:users,id, detalle: nullable|string }
+    ```
+    Uses `syncWithoutDetaching` on the `usuarios()` many-to-many, so re-assigning a previously removed user reactivates them (`activo = 1`) without duplicating the pivot row.
+  </Tab>
+
+  <Tab title="Remove a user">
+    ```
+    DELETE /correspondencia/procesos/{proceso}/remover-usuario/{user_id}
+    ```
+    Sets `activo = 0` on the pivot via `updateExistingPivot`. The record is **not** deleted, preserving audit history.
+  </Tab>
+
+  <Tab title="Save a state permission">
+    ```
+    POST /correspondencia/procesos/{proceso}/guardar-estado
+    Body: { id_estado: required|exists:corr_estados,id, detalle: nullable|string }
+    ```
+    Uses `EstadoProceso::updateOrCreate()` to add or reactivate a permitted state for this process step.
+  </Tab>
+
+  <Tab title="Get process users (AJAX)">
+    ```
+    GET /correspondencia/ajax/usuarios-proceso/{proceso_id}
+    Response: JSON array of ProcesoUsuario records with nested usuario relation
+    ```
+  </Tab>
+</Tabs>
+
+## Dashboard KPIs
+
+The tablero at `GET /correspondencia/tablero` computes four KPI counts from the filtered dataset:
+
+```php
+$kpis = [
+    'total'       => (clone $kpiQuery)->count(),
+    'vencidos'    => (clone $kpiQuery)->where('finalizado', false)
+                        ->whereHas('trd', fn($q) => $q->whereRaw(
+                            'DATE_ADD(corr_correspondencia.fecha_solicitud,
+                             INTERVAL corr_trd.tiempo_gestion DAY) < NOW()'
+                        ))->count(),
+    'pendientes'  => (clone $kpiQuery)->where('finalizado', false)->count(),
+    'finalizados' => (clone $kpiQuery)->where('finalizado', true)->count(),
+];
+```
+
+The PDF report version (`GET /correspondencia/tablero/pdf`) streams a DomPDF A4 landscape document with the same filters applied. Access to both the tablero and its PDF is gated by the `candirect:correspondencia.usuario.admin` middleware.

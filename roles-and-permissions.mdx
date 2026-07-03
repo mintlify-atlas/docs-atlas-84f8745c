@@ -1,0 +1,360 @@
+---
+title: "Role-Based Access Control in Corpen"
+sidebarTitle: "Roles & Permissions"
+description: "Learn how Corpen implements role-based access using Spatie Laravel Permission, the CanDirect middleware, and admin UI for managing roles and user assignments."
+---
+
+Corpen uses [Spatie Laravel Permission](https://spatie.be/docs/laravel-permission) (v6.9) for role-based access control across all modules. Every route in Corpen that requires a specific module access — insurance policies, claims, reservations, credits, archive management, and more — is guarded either by a `candirect` middleware check (direct permissions) or by Spatie's `can` middleware (role permissions). This page explains the full access control model and how to manage roles and permissions through the admin panel.
+
+---
+
+## Package and Database Tables
+
+The `spatie/laravel-permission` package is installed via Composer and creates four tables during the `2024_11_05_135024_create_permission_tables.php` migration:
+
+| Table | Purpose |
+|-------|---------|
+| `permissions` | All named permissions (e.g. `seguros.poliza.index`) |
+| `roles` | All roles (e.g. `admin`, `seguros`, `creditos`) |
+| `model_has_permissions` | Direct permission → User assignments |
+| `role_has_permissions` | Permission → Role assignments |
+
+An additional `actions` table (migration `2024_10_21_141315_create_actions_table.php`) stores the User → Role pivot used by Corpen's custom `Role` model relationship.
+
+---
+
+## User Model Integration
+
+The `App\Models\User` model uses the `HasRoles` trait from Spatie, giving it the full Spatie permission API:
+
+```php
+use Spatie\Permission\Traits\HasRoles;
+
+class User extends Authenticatable
+{
+    use HasRoles;
+
+    // Direct permission check (used by CanDirect middleware)
+    public function hasPermission($permiso): bool
+    {
+        return $this->permissions()
+            ->where('name', $permiso)
+            ->exists();
+    }
+
+    // Checks permissions assigned directly to the user (not via role)
+    public function hasDirectPermission($permiso): bool
+    {
+        return $this->getDirectPermissions()
+            ->pluck('name')
+            ->contains($permiso);
+    }
+}
+```
+
+`hasDirectPermission()` is the method called internally by the `CanDirect` middleware. It uses Spatie's `getDirectPermissions()` which queries the `model_has_permissions` table — not `role_has_permissions`.
+
+---
+
+## The `CanDirect` Middleware
+
+Corpen defines a custom middleware at `app/Http/Middleware/CanDirect.php` that checks whether the authenticated user has a **direct permission** matching the permission name passed to the middleware:
+
+```php
+class CanDirect
+{
+    public function handle(Request $request, Closure $next, ...$permissions)
+    {
+        $user = Auth::user();
+        $directPermissions = $user->getDirectPermissions()->pluck('name')->toArray();
+
+        foreach ($permissions as $permission) {
+            if (in_array($permission, $directPermissions)) {
+                return $next($request);
+            }
+        }
+
+        abort(404, 'Pagina no encontrada.');
+    }
+}
+```
+
+The middleware accepts one or more permission names as arguments and passes the request if **any** of them match. If none match, it aborts with a **404** response (rather than 403) to avoid revealing whether a resource exists.
+
+<Warning>
+  The `CanDirect` middleware aborts with **404**, not 403. This is by design — it prevents enumeration of protected resources. Users without the required direct permission will see a "Page not found" response, not an "Access denied" page. Ensure your admin documentation reflects this so operators are not confused when auditing access denials.
+</Warning>
+
+### Middleware Usage in Routes
+
+The middleware alias `candirect` is applied across all sensitive routes:
+
+```php
+// Insurance module
+Route::resource('poliza', SegPolizaController::class)
+    ->names('seguros.poliza')
+    ->middleware(['auth', 'candirect:seguros.poliza.index']);
+
+Route::resource('reclamacion', SegReclamacionesController::class)
+    ->names('seguros.reclamacion')
+    ->middleware(['auth', 'candirect:seguros.reclamacion.index']);
+
+Route::resource('convenio', SegConvenioController::class)
+    ->names('seguros.convenio')
+    ->middleware(['auth', 'candirect:seguros.convenio.index']);
+
+Route::resource('beneficios', SegBeneficiosController::class)
+    ->names('seguros.beneficios')
+    ->middleware(['auth', 'candirect:seguros.beneficios.index']);
+
+// Admin module
+Route::resource('users', UserController::class)
+    ->names('admin.users')
+    ->middleware(['auth', 'candirect:admin.users.index']);
+
+// Cinco / Savings module
+Route::resource('terceros', TercerosController::class)
+    ->names('cinco.tercero')
+    ->middleware(['auth', 'candirect:cinco.tercero.index']);
+
+// Support module
+Route::resource('soportes', ScpSoporteController::class)
+    ->middleware('candirect:soporte.lista.administrador');
+
+// Correspondence module
+Route::resource('usuarios', ScpUsuarioController::class)
+    ->middleware('candirect:correspondencia.usuario.admin');
+```
+
+---
+
+## Default Roles
+
+The `RoleSeeder` creates five default roles when you run `php artisan db:seed --class=RoleSeeder`:
+
+```php
+Role::create(['name' => 'admin']);
+Role::create(['name' => 'exequial']);
+Role::create(['name' => 'creditos']);
+Role::create(['name' => 'seguros']);
+Role::create(['name' => 'read']);
+```
+
+| Role | Intended use |
+|------|-------------|
+| `admin` | Full platform access, user and role management |
+| `exequial` | Funeral services module |
+| `creditos` | Credit management module |
+| `seguros` | Insurance policies, claims, and benefits |
+| `read` | Read-only viewer across modules |
+
+---
+
+## Permission Naming Convention
+
+Corpen permission names follow the pattern `{module}.{resource}.{action}`. Examples from production routes:
+
+| Permission Name | Guards Access To |
+|-----------------|-----------------|
+| `admin.users.index` | User management panel |
+| `admin.auditoria.index` | Audit log |
+| `seguros.poliza.index` | Insurance policies list |
+| `seguros.reclamacion.index` | Insurance claims list |
+| `seguros.convenio.index` | Insurance agreements |
+| `seguros.beneficios.index` | Insurance benefits |
+| `cinco.tercero.index` | Savings module — third parties |
+| `cinco.movcontables.index` | Savings accounting movements |
+| `cinco.retiros.index` | Savings withdrawals |
+| `reservas.Reserva.pagos` | Reservation payments |
+| `reservas.reserva.confirmadas` | Confirmed reservations |
+| `reservas.inmueble.active` | Active properties |
+| `soporte.lista.administrador` | Support admin panel |
+| `correspondencia.usuario.admin` | Correspondence admin tools |
+
+---
+
+## Managing Roles and Permissions via the Admin Panel
+
+Corpen provides a web-based admin interface for creating permissions, managing roles, and assigning permissions to roles.
+
+### Admin Panel Routes
+
+```php
+// User management
+Route::resource('users', UserController::class)
+    ->names('admin.users');
+
+// Role management
+Route::resource('roles', RoleController::class)
+    ->names('admin.roles');
+
+// Permission management
+Route::resource('permisos', PermissionsController::class)
+    ->names('admin.permisos');
+```
+
+| URL | Controller | Purpose |
+|-----|-----------|---------|
+| `/users` | `Admin\UserController` | List users, assign/remove roles |
+| `/roles` | `Admin\RoleController` | List roles, attach/detach permissions |
+| `/permisos/create` | `Admin\PermissionsController` | Create a new named permission |
+
+### How Role → Permission Assignment Works
+
+`RoleController@update` syncs permissions for a given role by computing the diff between existing and submitted permission IDs:
+
+```php
+public function update(Request $request, Role $role)
+{
+    $currentPermissions = $role->permissions()->pluck('id')->toArray();
+    $permissions = $request->input('permissions', []);
+
+    $permissionsToAdd    = array_diff($permissions, $currentPermissions);
+    $permissionsToRemove = array_diff($currentPermissions, $permissions);
+
+    if (!empty($permissionsToAdd)) {
+        $role->permissions()->attach($permissionsToAdd);
+    }
+    if (!empty($permissionsToRemove)) {
+        $role->permissions()->detach($permissionsToRemove);
+    }
+
+    return redirect()->back()->with('success', 'Permisos actualizados al rol correctamente.');
+}
+```
+
+---
+
+## Full Workflow: Creating and Assigning Access
+
+<Steps>
+
+### Create the permission
+
+Navigate to `/permisos/create` in the admin panel, or create it programmatically using Spatie's `Permission` model:
+
+```php
+use Spatie\Permission\Models\Permission;
+
+Permission::create([
+    'name'       => 'seguros.poliza.index',
+    'guard_name' => 'web',
+]);
+```
+
+Permission names must match the string passed to the `candirect` or `can` middleware on the corresponding route exactly.
+
+### Create a role (if it doesn't exist)
+
+Navigate to `/roles` in the admin panel and submit the role creation form, or create it programmatically:
+
+```php
+use Spatie\Permission\Models\Role;
+
+$role = Role::create([
+    'name'       => 'seguros',
+    'guard_name' => 'web',
+]);
+```
+
+Corpen's `RoleController@store` automatically lowercases the role name before saving.
+
+### Assign the permission to the role
+
+In the admin panel at `/roles`, select a role and check the desired permissions in the permission matrix form. Programmatically:
+
+```php
+$role = Role::findByName('seguros');
+$role->givePermissionTo('seguros.poliza.index');
+$role->givePermissionTo('seguros.reclamacion.index');
+$role->givePermissionTo('seguros.convenio.index');
+$role->givePermissionTo('seguros.beneficios.index');
+```
+
+### Assign the role to a user
+
+In the admin panel at `/users`, select a user and attach the role. Programmatically, using the Spatie API on the `User` model:
+
+```php
+$user = User::find($userId);
+
+// Assign a role
+$user->assignRole('seguros');
+
+// Or assign a direct permission (checked by CanDirect middleware)
+$user->givePermissionTo('seguros.poliza.index');
+```
+
+<Note>
+  The `CanDirect` middleware checks **direct permissions** (`model_has_permissions` table), not role-based permissions. If you only assign a role to a user — without also assigning the individual permission directly — the `candirect` middleware will still deny access. Use `$user->givePermissionTo(...)` to assign direct permissions, or use the admin panel's user permission form.
+</Note>
+
+</Steps>
+
+---
+
+## Programmatic Permission Reference
+
+```php
+use App\Models\User;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\Models\Permission;
+
+// Check if a user has a direct permission
+$user->hasDirectPermission('seguros.poliza.index'); // true/false
+
+// Check via the custom User model method
+$user->hasPermission('seguros.reclamacion.index'); // queries model_has_permissions
+
+// Assign role
+$user->assignRole('admin');
+
+// Remove role
+$user->removeRole('read');
+
+// Give direct permission
+$user->givePermissionTo('admin.users.index');
+
+// Revoke direct permission
+$user->revokePermissionTo('admin.users.index');
+
+// Sync permissions on a role
+$role = Role::findByName('seguros');
+$role->syncPermissions([
+    'seguros.poliza.index',
+    'seguros.reclamacion.index',
+    'seguros.convenio.index',
+    'seguros.beneficios.index',
+]);
+
+// Get all direct permissions for a user
+$permissions = $user->getDirectPermissions()->pluck('name');
+// e.g. ["seguros.poliza.index", "seguros.reclamacion.index"]
+```
+
+---
+
+## Model Relationships
+
+The `App\Models\Permisos` model (backed by the `permissions` table) exposes the following relationships:
+
+```php
+// All roles that have this permission
+$permiso->roles;            // belongsToMany via role_has_permissions
+
+// The primary role this permission was created for
+$permiso->rolePermission;   // belongsTo Role via role_id
+```
+
+The `App\Models\Role` model exposes:
+
+```php
+// Users associated with this role (via actions pivot table)
+$role->users;
+
+// All permissions attached to this role (via role_has_permissions)
+$role->permissions;
+
+// Permissions where this role is the primary role
+$role->permissionsRole;
+```

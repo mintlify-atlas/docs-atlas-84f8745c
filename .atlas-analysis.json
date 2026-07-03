@@ -1,0 +1,142 @@
+{
+  "projectType": "saas",
+  "projectName": "Corpen",
+  "projectDescription": "A comprehensive Laravel-based enterprise management platform for a Colombian cooperative organization, covering finance, insurance, payroll, document management, CRM, and more.",
+  "theme": "maple",
+  "primaryColor": "#fc2c24",
+  "lightColor": "#040404",
+  "darkColor": "#e29d78",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Getting Started",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Setup & Configuration",
+            "pages": [
+              "installation",
+              "environment-configuration",
+              "roles-and-permissions"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Modules",
+        "groups": [
+          {
+            "group": "Core Modules",
+            "pages": [
+              "modules/associates",
+              "modules/exequial-services",
+              "modules/insurance"
+            ]
+          },
+          {
+            "group": "Finance & Accounting",
+            "pages": [
+              "modules/accounting",
+              "modules/collections",
+              "modules/portfolio",
+              "modules/credits",
+              "modules/treasury",
+              "modules/five-percent"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "modules/document-management",
+              "modules/correspondence",
+              "modules/reservations",
+              "modules/inventory",
+              "modules/workflows"
+            ]
+          },
+          {
+            "group": "CRM & Engagement",
+            "pages": [
+              "modules/interactions",
+              "modules/support-tickets",
+              "modules/visits",
+              "modules/indicators"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Administration",
+        "groups": [
+          {
+            "group": "System Administration",
+            "pages": [
+              "admin/user-management",
+              "admin/audit-log",
+              "admin/demographics"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/excel-sync",
+              "integrations/pdf-reports",
+              "integrations/storage"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-module ERP for cooperative organizations",
+    "Insurance policy and claims management (Seguros)",
+    "Exequial (funeral) services management",
+    "Credit and loan lifecycle management",
+    "Document management and electronic archiving (GDO)",
+    "Correspondence and document workflow management",
+    "Portfolio and accounting reconciliation",
+    "Five-percent (Cinco) savings fund management",
+    "Reservations and real estate management",
+    "Inventory and asset tracking",
+    "CRM interactions and support ticket system",
+    "Role-based access control via Spatie Permissions",
+    "Excel bulk import/export for data synchronization",
+    "Indicators, KPIs, and quiz assessments",
+    "PWA support for mobile access"
+  ],
+  "publicApiSurface": [
+    "GET /dashboard — Main dashboard",
+    "GET /exequiales/asociados — Exequial associates list",
+    "GET /exequiales/prestarServicio — Exequial services",
+    "GET /seguros/poliza — Insurance policies",
+    "GET /seguros/reclamacion — Insurance claims",
+    "GET /cinco/terceros — Five-percent third parties",
+    "GET /retiros/calculoretiros — Retirement calculations",
+    "GET /contabilidad/cuentas-bancarias — Bank accounts",
+    "GET /contabilidad/extractos — Bank statement transactions",
+    "GET /cartera — Portfolio/receivables",
+    "GET /recaudo — Collections",
+    "GET /creditos — Credits",
+    "GET /reservas/tablero — Reservations dashboard",
+    "GET /archivo — Document archive",
+    "GET /correspondencia — Correspondence",
+    "GET /interacciones — CRM interactions",
+    "GET /flujo — Workflow/task management",
+    "GET /soportes — Support tickets",
+    "GET /inventario — Inventory",
+    "GET /asociados/tablero — Associates dashboard",
+    "GET /visitas/tablero — Visits dashboard",
+    "GET /indicators/indicador — Indicators",
+    "GET /admin/users — User administration",
+    "GET /admin/roles — Role management",
+    "GET /admin/permisos — Permissions management"
+  ]
+}

@@ -1,0 +1,286 @@
+---
+title: "Insurance Module: Policy and Claims Administration"
+sidebarTitle: "Insurance"
+description: "Administer insurance policies, beneficiaries, coverage, claims, and convenios for cooperative members using Corpen's Seguros module."
+---
+
+The Insurance (Seguros) module delivers full lifecycle management for group life insurance plans offered to cooperative members. It covers insured-person registration, policy issuance, plan and coverage catalogues, policy change events (novedades), beneficiary designation, claims filing and resolution, and financial exports. All routes are prefixed under `/seguros` and require the `auth` middleware; several sub-resources additionally require specific `candirect` permissions.
+
+<Warning>
+`candirect` permission guards must be assigned to the relevant user roles in the permissions management panel before those routes become accessible. Without the correct permission, requests are rejected at the middleware level. See the table below for which routes require which permission string.
+</Warning>
+
+## Sub-Resource Reference
+
+| Sub-resource | URL Prefix | Required Permission | Description |
+|-------------|-----------|---------------------|-------------|
+| `poliza` | `/seguros/poliza` | `candirect:seguros.poliza.index` | Insurance policies (one per insured person) |
+| `plan` | `/seguros/plan` | `auth` only | Plan catalogue with coverage, value, and premium |
+| `cobertura` | `/seguros/cobertura` | `auth` only | Coverage type definitions |
+| `beneficiario` | `/seguros/beneficiario` | `auth` only | Policy beneficiary designations |
+| `convenio` | `/seguros/convenio` | `candirect:seguros.convenio.index` | Insurance agreements with providers |
+| `reclamacion` | `/seguros/reclamacion` | `candirect:seguros.reclamacion.index` | Claims (sinistros) management |
+| `novedades` | `/seguros/novedades` | `auth` only | Policy change events |
+| `beneficios` | `/seguros/beneficios` | `candirect:seguros.beneficios.index` | Policy benefit records |
+| `condiciones` | *(via plan routes)* | `auth` only | Age-based plan conditions |
+
+## Full Route Reference
+
+| Method | Path | Route Name | Description |
+|--------|------|-----------|-------------|
+| `GET` | `/seguros/poliza` | `seguros.poliza.index` | List policies (paginated by `AF` parentesco) |
+| `GET` | `/seguros/poliza/create` | `seguros.poliza.create` | New policy form |
+| `POST` | `/seguros/poliza` | `seguros.poliza.store` | Create insured person and policy |
+| `GET` | `/seguros/poliza/{id}` | `seguros.poliza.show` | Policy detail with group, beneficiaries, novedades |
+| `GET` | `/seguros/poliza/formato` | `seguros.poliza.formato` | Download blank policy upload template (Excel) |
+| `POST` | `/seguros/poliza/upload` | `seguros.poliza.upload` | Upload Excel to update `primapagar` per policy |
+| `POST` | `/seguros/poliza/create/upload` | `seguros.poliza.createupload` | Bulk-create policies from Excel |
+| `POST` | `/seguros/poliza/nuevo-convenio/upload` | `seguros.poliza.nuevo-convenio` | CSV bulk-update plan and premium fields |
+| `GET` | `/seguros/poliza/create/upload` | `seguros.poliza.viewupload` | Upload panel view |
+| `GET` | `/seguros/polizas/polizas-no-actualizadas` | `seguros.poliza.listar-no-actualizadas` | List policies not matched in last CSV upload |
+| `GET` | `/seguros/seguros/cxc` | `seguros.poliza.download` | Export active policies as CXC Excel |
+| `GET` | `/seguros/polizaname/{name}` | `poliza.search` | Search policies by insured name |
+| `DELETE` | `/seguros/poliza/{id}` | `seguros.poliza.destroy` | Cancel a policy (creates novedad type 3) |
+| `GET` | `/seguros/plan` | `seguros.planes.index` | List insurance plans |
+| `GET` | `/seguros/planes/{edad}` | `seguros.planes.getplanes` | Age-based plan lookup |
+| `POST` | `/seguros/planes/duplicar-grupo` | `seguros.planes.duplicarGrupo` | Duplicate a condition group of plans |
+| `POST` | `/seguros/planes/{plan}/duplicar` | `seguros.planes.duplicar` | Duplicate a single plan |
+| `GET` | `/seguros/cobertura` | `seguros.cobertura.index` | List coverages |
+| `GET` | `/seguros/beneficiario` | `seguros.beneficiario.index` | List beneficiaries |
+| `GET` | `/seguros/beneficiario/create` | `seguros.beneficiario.create` | New beneficiary form |
+| `POST` | `/seguros/beneficiario` | `seguros.beneficiario.store` | Add beneficiary (also creates novedad type 4) |
+| `GET` | `/seguros/beneficiario/{id}/edit` | `seguros.beneficiario.edit` | Edit beneficiary form |
+| `PUT/PATCH` | `/seguros/beneficiario/{id}` | `seguros.beneficiario.update` | Update beneficiary details |
+| `DELETE` | `/seguros/beneficiario/{id}` | `seguros.beneficiario.destroy` | Deactivate beneficiary (`activo = 0`) |
+| `GET` | `/seguros/convenio` | `seguros.convenio.index` | List insurance agreements |
+| `GET` | `/seguros/reclamacion` | `seguros.reclamacion.index` | List all claims with status, gender, and overdue flags |
+| `GET` | `/seguros/reclamacion/create` | `seguros.reclamacion.create` | New claim form (requires active policy) |
+| `POST` | `/seguros/reclamacion` | `seguros.reclamacion.store` | File a new claim |
+| `GET` | `/seguros/reclamacion/{id}/edit` | `seguros.reclamacion.edit` | Edit / advance a claim |
+| `PUT/PATCH` | `/seguros/reclamacion/{id}` | `seguros.reclamacion.update` | Update claim state |
+| `POST` | `/seguros/reclamacion/generarpdf` | `seguros.reclamacion.generarpdf` | Download claims report PDF (filtered by year) |
+| `GET` | `/seguros/reclamacion/informe/excel` | `seguros.reclamacion.download` | Export siniestros report to Excel |
+| `GET` | `/seguros/reclamacion/informe-completo` | `seguros.reclamacion.exportarInformeCompleto` | Full grouped claims report (Excel, by state) |
+| `GET` | `/seguros/dashboard/reclamaciones` | `seguros.reclamaciones.dashboard` | Claims analytics dashboard |
+| `GET` | `/seguros/novedades` | `seguros.novedades.index` | List novedades by state tab |
+| `POST` | `/seguros/novedades` | `seguros.novedades.store` | Create a novedad |
+| `GET` | `/seguros/novedades/{id}` | `seguros.novedades.show` | Novedad creation form for an insured |
+| `GET` | `/seguros/novedades/{id}/edit` | `seguros.novedades.edit` | Edit a pending novedad |
+| `PUT/PATCH` | `/seguros/novedades/{id}` | `seguros.novedades.update` | Approve / reject / update novedades (batch or individual) |
+| `DELETE` | `/seguros/novedades/{id}` | `seguros.novedades.destroy` | Register a withdrawal novedad (type 3) |
+| `GET` | `/seguros/novedades/{id}/formulario` | `seguros.novedades.formulario` | View attached PDF file from S3 |
+| `GET` | `/seguros/seguros/novedades/download` | `seguros.novedades.download` | Download pending novedades as Excel |
+| `GET` | `/seguros/beneficios` | `seguros.beneficios.index` | List policy benefits |
+| `POST` | `/seguros/beneficios/list` | `seguros.beneficios.list` | Filtered benefit list |
+| `POST` | `/seguros/filtopolizas` | `seguros.poliza.filtros` | Export filtered policies to PDF |
+| `POST` | `/seguros/filtopolizas/excel` | `seguros.poliza.filtroexcel` | Export filtered policies to Excel |
+
+## Data Models
+
+<Tabs>
+  <Tab title="SEG_terceros">
+    Insured persons registered in the module. Stored in `SEG_terceros`.
+
+    | Column | Type | Notes |
+    |--------|------|-------|
+    | `cedula` | `bigint` (PK) | National ID |
+    | `nombre` | `string` | Full name (uppercase) |
+    | `fechaNacimiento` | `string` | Date of birth |
+    | `telefono` | `string` | Contact phone |
+    | `genero` | `string` | Gender |
+    | `distrito` | `string` | District code |
+  </Tab>
+  <Tab title="SEG_asegurados">
+    Links a person to their family group and parentesco. Stored in `SEG_asegurados`.
+
+    | Column | Type | Notes |
+    |--------|------|-------|
+    | `cedula` | `bigint` (PK) | FK → `SEG_terceros.cedula` |
+    | `parentesco` | `string` | `AF` = principal insured, `CO` = spouse, `VDA` = widow/widower, etc. |
+    | `titular` | `bigint` | Cédula of the `AF` head of the family group |
+  </Tab>
+  <Tab title="SEG_polizas">
+    Active and historical policies. Stored in `SEG_polizas`.
+
+    | Column | Type | Notes |
+    |--------|------|-------|
+    | `id` | `bigint` (PK) | Auto-increment |
+    | `seg_asegurado_id` | `bigint` | FK → `SEG_asegurados.cedula` |
+    | `seg_convenio_id` | `string` | Convention/agreement identifier |
+    | `seg_plan_id` | `int` | FK → `SEG_plans.id` |
+    | `active` | `boolean` | `true` = in force |
+    | `fecha_inicio` | `date` | Policy start date |
+    | `fecha_fin` | `date` | Policy end date (set on cancellation) |
+    | `fecha_novedad` | `date` | Last change event date |
+    | `valor_asegurado` | `bigint` | Insured amount |
+    | `valor_prima` | `bigint` | Insurer's premium |
+    | `extra_prima` | `int` | Extra premium percentage |
+    | `primapagar` | `bigint` | Corpen-billed premium |
+    | `valorpagaraseguradora` | `bigint` | Accumulated family-group premium |
+    | `descuento` | `decimal` | Discount value |
+    | `descuentopor` | `decimal` | Discount percentage |
+  </Tab>
+  <Tab title="SEG_reclamaciones">
+    Claims / sinistros against a policy. Stored in `SEG_reclamaciones`.
+
+    | Column | Type | Notes |
+    |--------|------|-------|
+    | `id` | `bigint` (PK) | Auto-increment |
+    | `cedulaAsegurado` | `bigint` | FK → `SEG_asegurados.cedula` |
+    | `idCobertura` | `int` | FK → `seg_coberturas.id` |
+    | `idDiagnostico` | `int` | FK → `SEG_diagnosticos.id` |
+    | `poliza_id` | `bigint` | FK → `SEG_polizas.id` |
+    | `fechaSiniestro` | `date` | Date the event occurred |
+    | `fechaContacto` | `date` | Date Corpen was first contacted |
+    | `horaContacto` | `time` | Time of first contact |
+    | `cedulaContacto` | `bigint` | Contact person's ID |
+    | `nombreContacto` | `string` | Contact person's name (uppercase) |
+    | `telcontacto` | `string` | Contact phone |
+    | `parentescoContacto` | `string` | Contact's relationship to insured |
+    | `estado` | `int` | Claim state ID (FK → `SEG_estadoReclamacion`) |
+    | `valor_asegurado` | `decimal` | Applicable insured amount at time of claim |
+    | `porreclamar` | `decimal` | Percentage of insured amount being claimed |
+    | `fecha_desembolso` | `date` | Date payment was disbursed |
+    | `finReclamacion` | `boolean` | `true` = claim resolved and closed |
+    | `idBeneficiario` | `int` | FK → `SEG_beneficiarios.id` |
+  </Tab>
+  <Tab title="SEG_novedades">
+    Policy change events. Stored in `SEG_novedades`.
+
+    | Column | Type | Notes |
+    |--------|------|-------|
+    | `id` | `bigint` (PK) | Auto-increment |
+    | `id_poliza` | `bigint` | FK → `SEG_polizas.id` |
+    | `id_asegurado` | `bigint` | FK → `SEG_asegurados.cedula` |
+    | `tipo` | `int` | `1` = modification, `2` = inclusion, `3` = withdrawal, `4` = beneficiary |
+    | `estado` | `int` | `1` = new, `2` = filed, `3` = approved, `4` = rejected, `5` = pending supplement |
+    | `id_plan` | `int` | Requested plan |
+    | `valorAsegurado` | `decimal` | Requested insured value |
+    | `primaAseguradora` | `decimal` | Requested insurer premium |
+    | `primaCorpen` | `decimal` | Requested Corpen premium |
+    | `extraprima` | `int` | Extra premium percentage |
+    | `formulario` | `string` | S3 path to the uploaded PDF form |
+    | `eliminargrupofamiliar` | `boolean` | If `true` on withdrawal, cancels all family-group policies |
+    | `beneficiario_id` | `int` | FK → `SEG_beneficiarios.id` (type-4 novedades) |
+  </Tab>
+</Tabs>
+
+## Creating a Policy
+
+<Steps>
+  <Step title="Open the policy creation form">
+    Navigate to `GET /seguros/poliza/create`. The form requires the insured person's cédula, name, date of birth, phone number, gender, and district. You also select whether this person is the titular (`AF`) or a dependent of an existing titular.
+  </Step>
+  <Step title="Validate the person against SiaSoft">
+    `POST /seguros/poliza` first checks whether the cédula already exists in `SEG_terceros`. If it does, the user is redirected back with an error. Otherwise, `ComaeTerController@show` is called to verify the cédula against the SiaSoft external directory — if the cédula is not found there, the process also stops with an error.
+  </Step>
+  <Step title="Create the third-party and insured records">
+    On a valid cédula, the controller creates:
+    1. A `SEG_terceros` record with the supplied personal data.
+    2. A `SEG_asegurados` record:
+       - `parentesco = 'AF'` and `titular = cedula` if the person is a principal insured.
+       - The supplied `parentesco` and `titular` (head of family group's cédula) if the person is a dependent.
+
+    All three creation steps are recorded in the Auditoría log as separate entries: `TERCERO CREADO`, `ASEGURADO CREADO`, and `POLIZA CREADA`.
+  </Step>
+</Steps>
+
+## Filing a Claim (Reclamación)
+
+<Steps>
+  <Step title="Confirm the policy is active">
+    `GET /seguros/reclamacion/create?a={cedula}` looks up the policy (`SEG_polizas`) for the insured person. If the policy's `active` field is `false`, the request is aborted with HTTP 403.
+  </Step>
+  <Step title="Complete the claim form">
+    The form presents:
+    - **Coverage** (`idCobertura`) — loaded from `plan.coberturas` via the policy's plan relationship.
+    - **Diagnosis** (`idDiagnostico`) — selectable from `SEG_diagnosticos` or entered as free text with the `adddiagnostico` checkbox.
+    - **Contact details** — cédula, name, phone, relationship.
+    - **Dates** — `fechaSiniestro`, `fechaContacto`, `horaContacto`, optional `fechadesembolso`.
+    - **Beneficiary** — from the insured's active `SEG_beneficiarios` records.
+    - **Flags** — `finreclamacion` (mark as fully resolved), `confirmviuda` (changes spouse's parentesco from `CO` to `VDA`), `cambiovalasegurado` (reduces insured value).
+  </Step>
+  <Step title="Submit the claim">
+    `POST /seguros/reclamacion` creates a `SEG_reclamaciones` record and immediately logs the initial state in `SEG_cambioEstadoReclamacion`:
+
+    ```php
+    SegCambioEstadoReclamacion::create([
+        'reclamacion_id'    => $reclamacion->id,
+        'estado_id'         => $request->estado_id,
+        'observacion'       => strtoupper($request->observacion),
+        'fecha_actualizacion' => now()->toDateString(),
+        'hora_actualizacion'  => now()->toTimeString(),
+    ]);
+    ```
+
+    If coverage type `1` (life coverage) is selected and `finreclamacion` is checked, the policy is deactivated (`active = false`).
+  </Step>
+  <Step title="Track and advance the claim">
+    Open `GET /seguros/reclamacion/{id}/edit`. Each `PUT /seguros/reclamacion/{id}` call:
+    - Updates `estado` in `SEG_reclamaciones`.
+    - Creates a new `SEG_cambioEstadoReclamacion` entry, preserving a full audit trail.
+    - If a `fechadesembolso` is supplied and `estado_id = 4`, sets `finReclamacion = true`.
+    - If `checkchangevalaseg = 1`, reduces `valor_asegurado` by 50%.
+
+    The Auditoría log records `update reclamacion id {id}` on every update.
+  </Step>
+</Steps>
+
+## Managing Novedades (Policy Change Events)
+
+The novedades sub-module is the approval queue for all policy changes. Each novedad has a `tipo`:
+
+| tipo | Meaning | Effect when approved (estado = 3) |
+|------|---------|-----------------------------------|
+| `1` | Modification | Updates `SEG_polizas` premium and plan fields |
+| `2` | Inclusion (new insured) | Creates a new `SEG_polizas` record |
+| `3` | Withdrawal | Sets `SEG_polizas.active = false`; optionally cancels whole family group |
+| `4` | Beneficiary | Sets `SEG_beneficiarios.activo = 1` |
+
+The `GET /seguros/novedades?estado={tab}` view displays five tab-filtered collections:
+
+| `estado` parameter | Filter |
+|--------------------|--------|
+| `nuevas` | `estado = 1` (new requests) |
+| `radicado` | `estado = 2` (filed) |
+| `complementos` | `estado = 5` (awaiting supplement) |
+| `aprobado` | `estado = 3` (approved) |
+| `rechazado` | `estado = 4` (rejected) |
+
+PDF forms uploaded during novedad creation are stored on Amazon S3 under `corpentunida/seguros_vida/{novedad_id}` and can be retrieved at `GET /seguros/novedades/{id}/formulario`.
+
+## Excel Exports and Reports
+
+<CardGroup cols={2}>
+  <Card title="CXC Export" icon="file-excel">
+    `GET /seguros/seguros/cxc` — exports all active policies to `DATOS_SEGUROS_VIDA_{date}.xlsx` with columns: POLIZA, ID, NOMBRE, NUM DOC, FECHA NAC, GENERO, EDAD, DOC AF, PARENTESCO, FEC NOVEDAD, VALOR ASEGURADO, EXTRA PRIMA, PRIMA PLAN, PRIMA CORPEN, VALOR TITULAR.
+  </Card>
+  <Card title="Policy Upload Template" icon="table">
+    `GET /seguros/poliza/formato` — downloads a blank `POLIZAS.xlsx` with the standard headers: POLIZA, TIP_DOC, NUM_DOC, NOMBRE, GENERO, FECHA_NAC, PARENTESCO, TITULAR, VALOR_ASEGURADO, EXTRA PRIM, PRIMA, PRIMA_CORPEN, VALOR_TITULAR.
+  </Card>
+  <Card title="Siniestros Excel Report" icon="file-chart-column">
+    `GET /seguros/reclamacion/informe/excel` — exports all claims to a dated `.xlsx` file with columns CEDULA, NOMBRE, DTO, AMPARO, VALOR COBERTURA, BONO CANASTA, TOTAL DESEMBOLSADO, FECHA RADICADO, FECHA DESEMBOLSO, DIAS HABILES. A totals row (sum and average working days) is appended automatically using `ReporteSiniestrosExport`.
+  </Card>
+  <Card title="Full Claims Report" icon="file-lines">
+    `GET /seguros/reclamacion/informe-completo` — exports claims grouped by state name using `ExportSegInformeReclamacion`, saved as `informe_siniestros.xlsx`.
+  </Card>
+  <Card title="Novedades Excel" icon="bell">
+    `GET /seguros/seguros/novedades/download` — exports all non-approved novedades (`estado != 3`) to a dated `NOVEDADES.xlsx` with columns CEDULA, NOMBRE, FECHA NACIMIENTO, EDAD, FECHA SOLICITUD, TIPO NOVEDAD, VALOR ASEGURADO SOLICITADO, GENERO, PARENTESCO, OBSERVACIONES.
+  </Card>
+  <Card title="Claims PDF Report" icon="file-pdf">
+    `POST /seguros/reclamacion/generarpdf` — generates a landscape letter PDF filtered by year and optionally by insured type (`todos`, `af` for principal insured, `co` for female insured). Uses `Barryvdh\DomPDF`.
+  </Card>
+</CardGroup>
+
+## Claims Dashboard
+
+The dashboard at `GET /seguros/dashboard/reclamaciones` aggregates claims data without any external API calls. Key metrics shown:
+
+- Claims grouped by `SEG_estadoReclamacion.nombre` (bar/doughnut chart data returned as `labels` + `valores`).
+- Claims broken down by coverage type and gender (`SEG_coberturas` joined with gender field from `MaeTerceros`).
+- Total claim count.
+- Full claims table segmented by state, each row including cobertura and tercero details.
+
+## Age-Based Plan Lookup
+
+`GET /seguros/planes/{edad}` calls `SegPlanController@getPlanes` to return available plans for a given insured age. The controller internally uses `getCondicion($edad)` to resolve the applicable `SegCondicion` ID, then filters `SEG_plans` by `condicion_corpen = {id}` and `vigente = true`, loading each plan's `convenio` relationship. This endpoint drives the plan selector shown during novedad creation and the policy show view.

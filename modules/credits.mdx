@@ -1,0 +1,186 @@
+---
+title: "Credits Module: Loan Lifecycle Management in Corpen"
+sidebarTitle: "Credits"
+description: "Administer the full loan lifecycle in Corpen: credit lines, applications, stages, guarantees, documents, payments, and notifications."
+---
+
+The Credits module manages every stage of a cooperative loan — from the parametric setup of credit product lines through origination, document attachment, payment recording, and final notification. Credits (`cre_creditos`) are the central entity referenced by the Portfolio module's agreements and payment vouchers, and by the Collections and Treasury modules when recording disbursements and receipts.
+
+All credit routes are secured with the `auth` middleware. Credits themselves are registered directly under the top-level `creditos` resource (no prefix), while their sub-resources (credit lines, guarantees, documents, etc.) are managed via their own controllers within the `App\Http\Controllers\Creditos` namespace.
+
+---
+
+## Sub-module overview
+
+<CardGroup cols={3}>
+  <Card title="Credit Lines" icon="layer-group">
+    Define the available loan products with terms, rates, age limits, and collateral type. Stored in `cre_lineas_creditos`.
+  </Card>
+  <Card title="Credits" icon="file-invoice-dollar">
+    Individual loan records linked to a member (`MaeTerceros`), a credit line, and a lifecycle state. Stored in `cre_creditos`.
+  </Card>
+  <Card title="States & Stages" icon="arrows-spin">
+    Credits progress through `cre_etapas` and `cre_estados`. Stage 16 is the default active filter in the index view.
+  </Card>
+  <Card title="Guarantees" icon="shield-halved">
+    Collateral records attached to a credit line. Managed by `GarantiaController` and stored in `cre_garantias`.
+  </Card>
+  <Card title="Documents" icon="folder-open">
+    Generic document attachments (`DocumentoController`) and specialised legal instruments: escrituras (`EscrituraController`) and pagarés (`PagareController`).
+  </Card>
+  <Card title="Notifications & Observations" icon="bell">
+    `NotificacionController` triggers alerts on credit events. `ObservacionController` records operator notes traceable via `User::observacionesRegistradas()`.
+  </Card>
+</CardGroup>
+
+---
+
+## Credit lines (`cre_lineas_creditos`)
+
+Credit lines are the product catalogue — they define the parameters that govern every loan issued under that product. A line must exist before any credit can be originated.
+
+### `cre_lineas_creditos` schema
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint (PK) | Auto-increment |
+| `nombre` | string | Display name of the credit line |
+| `cuenta` | integer | Accounting account code |
+| `tasa_interes` | decimal (8,2) | Annual interest rate (percentage) |
+| `plazo_minimo` | integer | Minimum term in months |
+| `plazo_maximo` | integer | Maximum term in months |
+| `edad_minima` | integer | Minimum member age |
+| `edad_maxima` | integer | Maximum member age |
+| `monto_maximo` | integer | Maximum disbursement amount |
+| `monto_minimo` | integer | Minimum disbursement amount |
+| `seguro_todo_riesgo` | integer | All-risk insurance rate or code |
+| `fecha_apertura` | date | Date the product was opened |
+| `fecha_cierre` | date (nullable) | Date the product was closed (null = still active) |
+| `observacion` | text (nullable) | Additional product notes |
+| `cre_garantias_id` | FK → `cre_garantias` | Required collateral type |
+| `cre_tipos_creditos_id` | FK → `cre_tipos_creditos` | Credit product category |
+
+The `LineaCreditoController` loads `garantia` and `tipoCredito` via Eager Loading on every read operation. Deleting a credit line that has existing credits associated will be blocked:
+
+```php
+if ($lineas_credito->creditos()->count() > 0) {
+    return redirect()->route('lineas_credito.index')
+        ->with('error', 'No se puede eliminar la línea porque está siendo utilizada en créditos existentes.');
+}
+```
+
+---
+
+## Credits (`cre_creditos`)
+
+The `cre_creditos` table stores each individual loan record.
+
+### `cre_creditos` schema
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint (PK) | Auto-increment |
+| `pr` | integer (unique) | Loan identifier / PR number |
+| `pagare` | integer (unique) | Promissory-note number |
+| `valor` | decimal (15,2) | Disbursed amount |
+| `cuotas` | integer | Number of instalments |
+| `fecha_desembolso` | date | Disbursement date |
+| `cre_estados_id` | FK → `cre_estados` | Current lifecycle state |
+| `cre_lineas_creditos_id` | FK → `cre_lineas_creditos` | Product line |
+| `mae_terceros_cod_ter` | bigint | FK → `MaeTerceros.cod_ter` (member) |
+
+The index view filters to state ID `16` by default (`where('cre_estados_id', 16)`) and supports a `nombre` query parameter that searches across the related `MaeTerceros.nom_ter` field:
+
+```php
+$query->whereHas('tercero', function ($subQuery) use ($nombre) {
+    $subQuery->where('nom_ter', 'like', "%{$nombre}%");
+});
+```
+
+Results are paginated at 10 per page and include the `tercero`, `lineaCredito.tipoCredito`, and `estado.etapa` relationships via Eager Loading.
+
+The `show` view loads the full detail chain:
+
+```php
+$credito->load([
+    'estado',
+    'lineaCredito',
+    'tercero',
+    'pagareRelacionado',
+    'escritura',
+    'notificaciones',
+]);
+```
+
+---
+
+## Originating a new credit
+
+<Steps>
+  <Step title="Ensure a credit line exists">
+    Navigate to `GET /lineas_credito` and verify that the desired product line exists with the correct rate, term, and guarantee type. If not, create one via `GET /lineas_credito/create`. A credit line requires at least one `Garantia` record and one `TipoCredito` record to be selectable in the form.
+  </Step>
+
+  <Step title="Open the credit creation form">
+    Go to `GET /creditos/create`. The form loads three datasets:
+
+    - `$estados` — all records from `cre_estados`
+    - `$lineasCredito` — all records from `cre_lineas_creditos`
+    - `$terceros` — all records from `MaeTerceros`
+  </Step>
+
+  <Step title="Fill in the credit details">
+    Complete the required fields validated by `StoreCreditoRequest`:
+
+    - `pr` — unique PR loan number
+    - `pagare` — unique promissory-note number
+    - `valor` — disbursed amount
+    - `cuotas` — number of instalments
+    - `fecha_desembolso` — disbursement date
+    - `cre_estados_id` — initial state
+    - `cre_lineas_creditos_id` — product line
+    - `mae_terceros_cod_ter` — member's `cod_ter`
+  </Step>
+
+  <Step title="Attach guarantees and documents">
+    After the credit record is created, attach the required collateral via `GarantiaController`, upload legal documents via `DocumentoController`, and register the promissory note via `PagareController` or the public deed via `EscrituraController`. These sub-resources all reference `cre_creditos_id`.
+  </Step>
+
+  <Step title="Record disbursement in Treasury">
+    Once the credit is approved, register the outgoing disbursement payment in the Treasury module (see [Treasury](/modules/treasury)). The Treasury `tes_pagos` table links back to `cre_creditos_id`.
+  </Step>
+
+  <Step title="Monitor notifications and observations">
+    Payment events and state transitions trigger notifications managed by `NotificacionController`. Operator notes are stored via `ObservacionController`. Both are accessible from the credit detail view.
+  </Step>
+</Steps>
+
+<Note>
+  The `User` model exposes `observacionesRegistradas(): HasMany` — all `ObservacionController`-managed notes created by a given user. Use `$user->observacionesRegistradas` to audit which agents have documented activity on active credits.
+</Note>
+
+---
+
+## Controller inventory
+
+| Controller | Route (convention) | Description |
+|---|---|---|
+| `CreditoController` | `creditos` resource | Credit CRUD |
+| `LineaCreditoController` | `lineas_credito` resource | Credit line CRUD |
+| `TipoCreditoController` | paramétrico | Credit type master |
+| `EstadoController` | paramétrico | Lifecycle states |
+| `EtapaController` | paramétrico | Lifecycle stages |
+| `GarantiaController` | `garantias` resource | Collateral records |
+| `DocumentoController` | `documentos` resource | Generic document attachments |
+| `EscrituraController` | `escrituras` resource | Public deeds |
+| `PagareController` | `pagares` resource | Promissory notes |
+| `NotificacionController` | `notificaciones` resource | Credit event notifications |
+| `ObservacionController` | `observaciones` resource | Operator notes |
+
+---
+
+## Relationships with other modules
+
+- **Portfolio** — `CarComprobantePago` and `Acuerdo` both reference `cre_creditos_id`.
+- **Collections** — `rec_pagos` stores instalment payments against `cre_creditos_id`.
+- **Treasury** — `tes_pagos` records disbursements against `cre_creditos_id`.

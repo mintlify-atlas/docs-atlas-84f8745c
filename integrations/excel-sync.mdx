@@ -1,0 +1,303 @@
+---
+title: "Excel Sync: Bulk Data Import and Export in Corpen"
+sidebarTitle: "Excel Sync"
+description: "Use Corpen's Excel synchronization tools to bulk-import and export associates, demographics, accounting data, and more using Maatwebsite Excel and PhpSpreadsheet."
+---
+
+Corpen's Excel synchronization system lets administrators move large datasets in and out of the platform without manual data entry. Every module that manages master records — associates, demographics, accounting transactions, and insurance policies — ships with its own Export and Import class built on `maatwebsite/excel` ^3.1 and `phpoffice/phpspreadsheet` ^1.30. The workflow is always the same: download a template populated with live data, adjust it offline, re-upload, review a preview, and confirm the upsert into the database.
+
+## Installed Packages
+
+| Package | Version | Purpose |
+|---|---|---|
+| `maatwebsite/excel` | `^3.1` | Laravel wrapper for reading and writing Excel files |
+| `phpoffice/phpspreadsheet` | `^1.30` | Underlying spreadsheet engine (reads `.xlsx`, `.xls`, `.csv`) |
+
+Both packages are declared in `composer.json` and are auto-discovered by Laravel. No manual service provider registration is required.
+
+## Export and Import Classes
+
+Corpen organises its Excel classes under `app/Exports/` and `app/Imports/`, grouped by domain:
+
+**Exports**
+- `app/Exports/Asociado/AsociadosExport.php` — full associate master dump (48 columns)
+- `app/Exports/Asociado/CiudadExport.php`, `DireccionExport.php`, `PaisExport.php`, `RegionExport.php`, `SubregionExport.php` — demographic reference tables
+- `app/Exports/Demografia/DemografiaExport.php` — multi-sheet export (Paises, Regiones, Subregiones, Ciudades, Direcciones)
+- `app/Exports/ReporteSiniestrosExport.php` — insurance claims report with styled headers and a summary row
+- `app/Exports/TransaccionesExport.php` — accounting extract transactions
+
+**Imports**
+- `app/Imports/Asociado/AsociadosImport.php` — associates upsert with date transformation and boolean inference
+- `app/Imports/Asociado/TransaccionesImport.php` — associate transaction import
+- `app/Imports/Cartera/ExcelMorososImport.php` — portfolio delinquent-account import
+- `app/Imports/Contabilidad/` — accounting-specific import classes
+- `app/Imports/Demografia/DemografiaImport.php` — multi-sheet import mapping each tab to a domain import class
+- `app/Imports/ExcelImport.php` — insurance policy import (`SegPoliza`)
+- `app/Imports/PolizasImport.php` — bulk insurance policy sync
+- `app/Imports/ExcelExport.php` — generic reusable export used by one-off reports
+
+## Modules with Excel Sync
+
+| Module | Route prefix | Export downloads | Import uploads |
+|---|---|---|---|
+| Associates | `/asociados/sincronizar` | `maestro_asociados_<date>.xlsx` | Upsert on `cedula` |
+| Demographics | `/demograficos/sincronizar` | `demografia_maestra.xlsx` (multi-sheet) | Multi-sheet upsert |
+| Accounting | `/contabilidad/sincronizar` | `Data_Transacciones.xlsx` | Hash-dedup upsert in batches of 1 000 |
+| Insurance claims | `/seguros/reclamacion/informe/excel` | Siniestros report | — |
+
+## How Exports Work
+
+An Export class implements `FromCollection` (to pull data from Eloquent) and `WithHeadings` (to name the columns). Call `Excel::download()` from a controller action to stream the file directly to the browser.
+
+<CodeGroup>
+
+```php AsociadosExport.php
+<?php
+
+namespace App\Exports\Asociado;
+
+use App\Models\Asociado\MaeAsociado;
+use Maatwebsite\Excel\Concerns\FromCollection;
+use Maatwebsite\Excel\Concerns\WithHeadings;
+
+class AsociadosExport implements FromCollection, WithHeadings
+{
+    public function collection()
+    {
+        return MaeAsociado::select([
+            'cedula', 'nombre1', 'nombre2', 'apellido1', 'apellido2',
+            'fecha_nacimiento', 'lugar_expedicion_cedula', 'fecha_expedicion', 'estado_civil',
+            'correo_pastor', 'celular_pastor', 'whatsapp',
+            'fecha_afiliacion', 'distrito_actual', 'ciudad_distrito', 'direccion_distrito',
+            'estado_pastor', 'especificacion', 'licencia', 'pais', 'iglesia_actual',
+            // ... 48 columns total
+        ])->get();
+    }
+
+    public function headings(): array
+    {
+        return [
+            'cedula', 'nombre1', 'nombre2', 'apellido1', 'apellido2',
+            // column names must match exactly what the import expects
+        ];
+    }
+}
+```
+
+```php Controller — trigger download
+use Maatwebsite\Excel\Facades\Excel;
+use App\Exports\Asociado\AsociadosExport;
+
+public function descargarExcel()
+{
+    return Excel::download(
+        new AsociadosExport,
+        'maestro_asociados_' . now()->format('Y_m_d_His') . '.xlsx'
+    );
+}
+```
+
+</CodeGroup>
+
+## How Imports Work
+
+An Import class implements `ToCollection` (or `ToModel`) and `WithHeadingRow` so that column names in the first spreadsheet row are used as array keys. After instantiating the import and calling `Excel::import()`, call `getRows()` to retrieve the parsed data for validation before touching the database.
+
+<CodeGroup>
+
+```php AsociadosImport.php (simplified)
+<?php
+
+namespace App\Imports\Asociado;
+
+use Illuminate\Support\Collection;
+use Maatwebsite\Excel\Concerns\ToCollection;
+use Maatwebsite\Excel\Concerns\WithHeadingRow;
+
+class AsociadosImport implements ToCollection, WithHeadingRow
+{
+    protected $rows = [];
+
+    public function collection(Collection $collection)
+    {
+        foreach ($collection as $row) {
+            // Skip rows with an empty cedula
+            if (empty(trim($row['cedula'] ?? ''))) {
+                continue;
+            }
+
+            $this->rows[] = [
+                'cedula'            => $row['cedula'],
+                'nombre1'           => $row['nombre1'],
+                'apellido1'         => $row['apellido1'],
+                'fecha_nacimiento'  => $this->transformDate($row['fecha_nacimiento'] ?? null),
+                'estado'            => $row['estado'] ?? 'Activo',
+                // boolean fields accept SI/SÍ/TRUE/1/VERDADERO/V
+                'escaneado'         => $this->parseBoolean($row['escaneado'] ?? false),
+                // ... 48 fields total
+            ];
+        }
+    }
+
+    public function getRows(): array
+    {
+        return $this->rows;
+    }
+
+    private function transformDate($value, $format = 'Y-m-d')
+    {
+        if (!$value) return null;
+        if (is_numeric($value)) {
+            // Convert Excel serial date numbers via PhpSpreadsheet
+            return \Carbon\Carbon::instance(
+                \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($value)
+            )->format($format);
+        }
+        return \Carbon\Carbon::parse($value)->format($format);
+    }
+}
+```
+
+```php Controller — upload and preview
+use Maatwebsite\Excel\Facades\Excel;
+use App\Imports\Asociado\AsociadosImport;
+
+public function subirExcel(Request $request)
+{
+    $request->validate([
+        'excel_file' => 'required|mimes:xlsx,xls,csv|max:51200',
+    ]);
+
+    $import = new AsociadosImport();
+    Excel::import($import, $request->file('excel_file'));
+    $filasRaw = $import->getRows();
+
+    // Check which cedulas already exist — one query instead of N+1
+    $cedulasExistentes = MaeAsociado::whereIn('cedula', array_column($filasRaw, 'cedula'))
+        ->pluck('cedula')
+        ->toArray();
+
+    // Store processed rows in cache, redirect to preview
+    $cacheKey = 'import_asociados_' . auth()->id() . '_' . time();
+    Cache::put($cacheKey, $filasRaw, now()->addMinutes(30));
+    session(['import_asociados_key' => $cacheKey]);
+
+    return view('asociados.excel-sync', compact('filasRaw', 'cedulasExistentes'));
+}
+```
+
+</CodeGroup>
+
+## Multi-Sheet Imports: Demographics
+
+The Demographics module uses `WithMultipleSheets` to route each Excel tab to its own import class. The sheet **name in the file must match the key in `sheets()`** exactly.
+
+```php
+// app/Imports/Demografia/DemografiaImport.php
+class DemografiaImport implements WithMultipleSheets
+{
+    public function sheets(): array
+    {
+        return [
+            'Paises'      => new PaisImport(),
+            'Regiones'    => new RegionImport(),
+            'Subregiones' => new SubregionImport(),
+            'Ciudades'    => new CiudadImport(),
+            'Direcciones' => new DireccionImport(),
+        ];
+    }
+}
+```
+
+The matching `DemografiaExport` uses `WithMultipleSheets` as well, generating the five tabs in a single download so users always get a correctly-named template:
+
+```php
+// app/Exports/Demografia/DemografiaExport.php
+class DemografiaExport implements WithMultipleSheets
+{
+    use Exportable;
+
+    public function sheets(): array
+    {
+        return [
+            new PaisExport(),
+            new RegionExport(),
+            new SubregionExport(),
+            new CiudadExport(),
+            new DireccionExport(),
+        ];
+    }
+}
+```
+
+## Session-Based Validation UX
+
+Corpen never writes to the database on the first upload. Instead it shows an interactive preview so administrators can catch errors before they propagate.
+
+**Associates flow** — the parsed rows are stored in Laravel Cache (keyed by user ID and timestamp). The preview view shows each row with new / update badges and lets the user correct `cedula`, `nombre1`, and `apellido1` inline before confirming.
+
+**Demographics flow** — the uploaded file is saved to `storage/app/imports/` via `$request->file()->store('imports')` and the path is stored in the PHP session. Confirmation triggers `Excel::import(new DemografiaImport(), $path)` and then deletes the temporary file.
+
+**Accounting flow** — `ExcelSyncController` uses `Excel::toArray()` for a direct row-by-row scan, computes a hash per transaction (`{account}-{timestamp}-{amount}-{cedula}`), and flags duplicates in memory before rendering the preview. Confirmation sends the edited JSON back as `registros_json` and runs an upsert in batches of 1 000.
+
+## Full Import Workflow
+
+<Steps>
+
+### Download the template
+
+Navigate to the sync page for the target module and click **Descargar Excel**. The file contains all current records with correct column headers — use it as both a reference and a blank template for new data.
+
+### Fill in your data
+
+Open the file in Excel or LibreOffice Calc. Keep the header row in row 1 unchanged. Date columns (`fecha_nacimiento`, `fecha_expedicion`, etc.) accept both ISO format (`2024-03-15`) and Excel serial numbers. Boolean columns (`escaneado`, `cargado_ecm`, `validado_archivo`) accept `SI`, `SÍ`, `TRUE`, `VERDADERO`, `V`, or `1`.
+
+### Upload the file
+
+Return to the sync page and upload the modified file. Corpen validates the MIME type (`xlsx`, `xls`, `csv`) and size (up to 60 MB for accounting, 10 MB for demographics). The file is parsed in memory — no permanent storage occurs at this step.
+
+### Review the preview
+
+Corpen displays a table showing each row alongside a **Nuevo** or **Actualizar** badge and flags any duplicate rows it detected. For associates, you can correct key fields directly in the table. Rows with an empty `cedula` are automatically excluded.
+
+### Confirm the synchronization
+
+Click **Confirmar Sincronización**. Corpen runs the upsert inside a database transaction. If any row fails, the entire batch is rolled back and an error message is shown. On success, temporary files and session keys are cleaned up automatically.
+
+</Steps>
+
+<Warning>
+The column headers in row 1 of your Excel file **must match exactly** the headings defined in the Import class (case-sensitive, no extra spaces). Uploading a file with renamed or reordered headers will produce an import with all optional fields set to `null`. Always start from the template downloaded from Corpen.
+</Warning>
+
+<Note>
+The accounting sync upsert runs inside `DB::transaction()` and processes rows in chunks of 1 000. If the database rejects any chunk — for example, due to a constraint violation — the entire transaction rolls back and no rows are written. Re-upload a corrected file to retry.
+</Note>
+
+## Styled Reports with WithStyles
+
+`ReporteSiniestrosExport` demonstrates how to add visual formatting to a report. It implements `WithStyles` from PhpSpreadsheet to bold the header row, apply a grey fill, and highlight the final summary row in yellow:
+
+```php
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
+
+public function styles(Worksheet $sheet)
+{
+    $lastRow = $sheet->getHighestRow();
+    return [
+        1         => ['font' => ['bold' => true], 'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'color' => ['rgb' => 'D9D9D9']]],
+        $lastRow  => ['font' => ['bold' => true], 'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'color' => ['rgb' => 'FFF2CC']]],
+    ];
+}
+```
+
+## Large-File Considerations
+
+The accounting sync controller raises PHP limits before processing:
+
+```php
+ini_set('memory_limit', '2048M');
+set_time_limit(600); // 10-minute max execution
+```
+
+These values are set at runtime inside the controller action — they do not affect other requests. Make sure your PHP-FPM pool or CLI configuration allows these overrides in production. Files up to 60 MB (accounting) and 10 MB (demographics) are supported out of the box.

@@ -1,0 +1,184 @@
+---
+title: "Visits Module: Member and Client Visit Tracking"
+sidebarTitle: "Visits"
+description: "Log, schedule, and review cooperative member visits with client auto-complete lookup and a centralized visit dashboard in Corpen."
+---
+
+The Visits module provides Corpen staff with a lightweight, dedicated area for logging and reviewing in-person visits by cooperative members and clients. Staff can search for a member by name or ID using an AJAX endpoint before registering a visit, and all visit records are accessible through both a paginated dashboard and a full CRUD resource.
+
+## Route Group
+
+All routes are grouped under `/visitas` and protected by the `auth` middleware. Named routes use the `visitas.` prefix.
+
+```php
+Route::middleware('auth')
+    ->prefix('visitas')
+    ->name('visitas.')
+    ->group(function () {
+        Route::get('/cliente/buscar', [VisitaCorpenController::class, 'buscarCliente'])
+            ->name('cliente.buscar');
+
+        Route::get('tablero', [VisitaCorpenController::class, 'index'])
+            ->name('tablero');
+
+        Route::resource('corpen', VisitaCorpenController::class)
+            ->names([
+                'index'   => 'corpen.index',
+                'create'  => 'corpen.create',
+                'store'   => 'corpen.store',
+                'show'    => 'corpen.show',
+                'edit'    => 'corpen.edit',
+                'update'  => 'corpen.update',
+                'destroy' => 'corpen.destroy',
+            ])
+            ->parameters(['corpen' => 'visitaCorpen']);
+    });
+```
+
+## Routes Reference
+
+| Method | URL | Name | Description |
+|---|---|---|---|
+| `GET` | `/visitas/cliente/buscar` | `visitas.cliente.buscar` | AJAX client search for autocomplete |
+| `GET` | `/visitas/tablero` | `visitas.tablero` | Paginated visit dashboard |
+| `GET` | `/visitas/corpen` | `visitas.corpen.index` | Full list of visit records |
+| `GET` | `/visitas/corpen/create` | `visitas.corpen.create` | New visit form |
+| `POST` | `/visitas/corpen` | `visitas.corpen.store` | Save new visit |
+| `GET` | `/visitas/corpen/{visitaCorpen}` | `visitas.corpen.show` | View single visit (JSON) |
+| `GET` | `/visitas/corpen/{visitaCorpen}/edit` | `visitas.corpen.edit` | Edit visit form |
+| `PUT` | `/visitas/corpen/{visitaCorpen}` | `visitas.corpen.update` | Update visit |
+| `DELETE` | `/visitas/corpen/{visitaCorpen}` | `visitas.corpen.destroy` | Delete visit |
+
+## Controller: `VisitaCorpenController`
+
+Namespace: `App\Http\Controllers\Vistas\VisitaCorpenController`
+
+The controller uses the `VisitaCorpen` model (namespace `App\Models\Vistas\VisitaCorpen`) and the `MaeTerceros` model for the client search.
+
+### Dashboard (`index`)
+
+`GET /visitas/tablero` loads all visits with their associated client, sorted by `fecha` descending, and paginates at 15 records per page.
+
+Optional query parameters for filtering:
+
+| Parameter | Column | Notes |
+|---|---|---|
+| `ciudad` | `banco` | The underlying DB column is `banco`; the UI label is *ciudad* |
+| `fecha` | `fecha` | Filters to an exact date (`whereDate`) |
+
+```http
+GET /visitas/tablero?ciudad=Bogotá&fecha=2025-02-14
+```
+
+### Client Search (`buscarCliente`)
+
+`GET /visitas/cliente/buscar` accepts a `query` parameter and performs a case-insensitive search on both `cod_ter` (member ID) and `nom_ter` (name) in `mae_terceros`, returning up to 10 results.
+
+```http
+GET /visitas/cliente/buscar?query=garcia
+```
+
+Response:
+
+```json
+[
+  { "cod_ter": "10234567", "nom_ter": "GARCIA LOPEZ CARLOS ANDRES" },
+  { "cod_ter": "10987654", "nom_ter": "GARCIA RUIZ ANA MARIA" }
+]
+```
+
+## Creating a Visit
+
+<Steps>
+  <Step title="Search for the member">
+    Before opening the create form, staff can look up the client via the AJAX endpoint. Provide at least a partial name or member ID in the `query` parameter:
+
+    ```http
+    GET /visitas/cliente/buscar?query=10234567
+    ```
+
+    The response supplies the `cod_ter` (member ID) needed for the visit record.
+  </Step>
+
+  <Step title="Open the new visit form">
+    Navigate to `GET /visitas/corpen/create`. Use the client data returned from the search to populate the member identification field.
+
+    ```http
+    GET /visitas/corpen/create
+    ```
+  </Step>
+
+  <Step title="Submit the visit record">
+    Post to `POST /visitas/corpen`. Required and optional fields validated by `store()`:
+
+    ```php
+    // ScpSoporteController@store validation
+    'cedula'         => 'required|string',          // FK → mae_terceros.cod_ter
+    'banco'          => 'required|string|max:255',  // City / branch (stored as 'banco' in DB)
+    'motivo'         => 'nullable|string',
+    'registrado_por' => 'required|string|max:255',  // Name of the staff member logging the visit
+    ```
+
+    The model's static `registrar()` method is called internally:
+
+    ```php
+    $visita = VisitaCorpen::registrar(
+        $request->cedula,
+        $request->ciudad,
+        $request->motivo,
+        $request->registrado_por,
+    );
+    ```
+
+    A successful store returns a `201` JSON response with the newly created visit.
+  </Step>
+
+  <Step title="Confirm on the dashboard">
+    Return to `GET /visitas/tablero` to verify the entry. The dashboard sorts visits by `fecha` descending so the newest record appears at the top.
+  </Step>
+</Steps>
+
+## Updating a Visit
+
+Submit a `PUT` request to `/visitas/corpen/{visitaCorpen}`. Only the fields `banco` (city), `motivo`, and `registrado_por` are accepted for update:
+
+```php
+// VisitaCorpenController@update validation
+'ciudad'         => 'nullable|string|max:255',
+'motivo'         => 'nullable|string',
+'registrado_por' => 'nullable|string|max:255',
+```
+
+## Statistics
+
+`VisitaCorpenController@estadisticas` returns a JSON summary of visits grouped by city and by the staff member who recorded them:
+
+```http
+GET /visitas/corpen/estadisticas
+```
+
+```json
+{
+  "por_ciudad": [
+    { "banco": "Bogotá", "total": 45 },
+    { "banco": "Medellín", "total": 20 }
+  ],
+  "por_usuario": [
+    { "registrado_por": "Juan Pérez", "total": 30 }
+  ]
+}
+```
+
+## Searching Visits by Client
+
+`VisitaCorpenController@search` returns all historical visits for a specific member by their `cedula`:
+
+```http
+GET /visitas/corpen/search?cedula=10234567
+```
+
+This returns an ordered JSON array of `VisitaCorpen` records with the related client loaded.
+
+<Note>
+  The client search autocomplete endpoint (`GET /visitas/cliente/buscar?query=...`) is the primary entry point for staff to identify members before logging a visit. It queries `mae_terceros` — the shared member master table — using a `LIKE` search on both `cod_ter` and `nom_ter`, so partial names and partial IDs both work. Results are limited to **10 records** to keep the response fast.
+</Note>

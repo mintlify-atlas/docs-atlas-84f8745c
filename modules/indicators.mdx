@@ -1,0 +1,237 @@
+---
+title: "Indicators Module: KPIs, Reports, and Assessments"
+sidebarTitle: "Indicators"
+description: "Define KPIs, generate downloadable indicator reports, and run quiz-based assessments for staff in Corpen's Indicators module."
+---
+
+The Indicators module lets Corpen management define measurable KPIs, execute live SQL queries against the database to calculate current values, download PDF performance reports, and run multiple-choice assessment quizzes for staff. KPIs are grouped by organizational area and each indicator stores the calculation formula alongside its target (meta) and measurement frequency. The quiz system is publicly accessible so that external participants or staff without an account can complete an assessment.
+
+## Routes Overview
+
+### Public quiz routes (no authentication required)
+
+| Method | URL | Name | Controller method |
+|---|---|---|---|
+| `GET` | `/indicators/quiz` | `indicators.quiz.inicio` | `QuizController@quizinicio` |
+| `GET` | `/indicators/quiz/{prueba}/preguntas` | `indicators.quiz.preguntas` | `QuizController@generarpreguntas` |
+| `POST` | `/indicators/validarcorreo` | `indicators.validar.correo` | `QuizController@validar` |
+| `POST` | `/indicators/quiz/store` | `indicators.quiz.store` | `QuizController@storeQuiz` |
+
+### Authenticated routes
+
+```php
+// Quiz management (auth required)
+Route::prefix('indicators')->group(function () {
+    Route::resource('quizes', QuizController::class)
+        ->names('indicators.quizes')
+        ->middleware('auth');
+});
+
+// Indicator CRUD + report download (auth required)
+Route::prefix('indicators')->group(function () {
+    Route::resource('indicador', IndicadoresController::class)
+        ->names('indicators.indicadores')
+        ->middleware('auth');
+
+    Route::post('/generar/informe', [IndicadoresController::class, 'descargarInforme'])
+        ->name('indicators.indicadores.descargar')
+        ->middleware('auth');
+});
+```
+
+## Indicators Sub-resource
+
+Controller: `App\Http\Controllers\Indicators\IndicadoresController`  
+Model: `App\Models\Indicators\IndIndicadores`  
+Route resource prefix: `indicators/indicador` → named `indicators.indicadores.*`
+
+### Indicator fields
+
+```php
+// IndicadoresController@store
+IndIndicadores::create([
+    'nombre'      => $request->name,        // KPI display name
+    'calculo'     => $request->calculation, // Formula description
+    'meta'        => $request->goal,        // Target string, e.g. "≥ 80%" or "≤ 6 horas"
+    'frecuencia'  => $request->frecuencia,  // Measurement frequency
+    'responsable' => $request->responsible, // FK → gdo_empleados.id
+    'area'        => $request->area,        // FK → gdo_area.id (also maps to a role)
+    'consulta_bd' => $request->consultasql, // Raw SQL query run at display time
+]);
+```
+
+The `consulta_bd` field holds a raw SQL `SELECT` statement. The index page executes it live via `DB::select()` and attaches the result as `$ind->indicador_calculado` on each indicator object. If a query throws an exception, the user is redirected back with the error message.
+
+### Indicator index
+
+`GET /indicators/indicador` (named `indicators.indicadores.index`) loads only the indicators accessible to the authenticated user based on their assigned roles:
+
+```php
+$roles = Action::where('user_id', Auth::id())->pluck('role_id');
+
+$indicators = IndIndicadores::with('arearel')
+    ->whereIn('area', $roles)
+    ->get()
+    ->groupBy(function ($item) {
+        return $item->arearel->name ?? ' ';
+    });
+```
+
+The view receives indicators grouped by area name, making it easy to render section headers per department.
+
+## Defining an Indicator and Generating a Report
+
+<Steps>
+  <Step title="Create the indicator">
+    Navigate to `GET /indicators/indicador/create`. The form loads available areas from `gdo_area` and employee names from `gdo_empleados` (IDs ≥ 11):
+
+    ```http
+    GET /indicators/indicador/create
+    ```
+
+    Fill in the name, calculation formula, goal, frequency, responsible employee, area, and the SQL query. Then submit to `POST /indicators/indicador`.
+  </Step>
+
+  <Step title="Verify the calculated value">
+    Return to `GET /indicators/indicador` (the index). The controller runs each indicator's `consulta_bd` query and sets `$ind->indicador_calculado` to the first column of the first row returned. Verify that the live value appears correctly.
+
+    Example SQL stored in `consulta_bd`:
+
+    ```sql
+    SELECT COUNT(*) FROM scp_soportes WHERE estado = 4
+        AND created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')
+    ```
+  </Step>
+
+  <Step title="Edit if needed">
+    Use `GET /indicators/indicador/{id}/edit` to update the formula, goal, or SQL query. Submit via `PUT /indicators/indicador/{id}`.
+  </Step>
+
+  <Step title="Download the PDF report">
+    Send a `POST` request to `/indicators/generar/informe` (requires auth). The controller:
+
+    1. Runs `dataIndicadores()` to compute all live values for the user's areas.
+    2. Renders the `indicators.informepdf` Blade view as a PDF using `barryvdh/laravel-dompdf` on A4 portrait paper.
+    3. Saves the file to S3 at `corpentunida/indicators/InformeTIC_{timestamp}.pdf`.
+    4. Creates an `IndRegistroInformes` record logging the file path, user, and download timestamp.
+    5. Streams the PDF directly to the browser as `informe_indicadores.pdf`.
+
+    ```http
+    POST /indicators/generar/informe
+    ```
+  </Step>
+</Steps>
+
+## Quiz Sub-resource
+
+Controller: `App\Http\Controllers\Indicators\QuizController`  
+Models: `IndQuiz`, `IndPreguntas`, `IndRespuestas`, `IndUsuarios`  
+Route resource prefix: `indicators/quizes` → named `indicators.quizes.*`
+
+### Public quiz flow
+
+<Steps>
+  <Step title="Start the quiz">
+    Any user — authenticated or not — can access `GET /indicators/quiz` to view the quiz entry screen. No login is required.
+
+    ```http
+    GET /indicators/quiz
+    ```
+  </Step>
+
+  <Step title="Validate email">
+    Before showing questions, the client-side form calls `POST /indicators/validarcorreo` to confirm:
+    - The email exists in `gdo_cargo.correo_corporativo` (i.e. the person is a staff member).
+    - The user has not already completed this specific quiz (`prueba` ID).
+
+    ```http
+    POST /indicators/validarcorreo
+
+    correoUsuario=juan.garcia@corpen.coop&pruebaid=1
+    ```
+
+    Response:
+
+    ```json
+    { "existe": true, "respondido": false }
+    ```
+  </Step>
+
+  <Step title="Load questions">
+    Navigate to `GET /indicators/quiz/{prueba}/preguntas`. The controller verifies the quiz is active (`estado = 1`) and then builds a question set:
+
+    - 5 questions drawn randomly from `ind_preguntas` for the given quiz ID (excluding the two special question IDs 1 and 2).
+    - The 2 fixed special questions (IDs 1 and 2) are always appended.
+    - Each question gets 1 correct answer and up to 3 incorrect answers, shuffled.
+
+    ```http
+    GET /indicators/quiz/1/preguntas
+    ```
+  </Step>
+
+  <Step title="Submit answers">
+    Post the completed quiz to `POST /indicators/quiz/store`:
+
+    ```php
+    // QuizController@storeQuiz — key request fields
+    $request->preguntas        // Array of {idpregunta, idrespuesta}
+    $request->correoUsuario    // Participant's corporate email
+    $request->nombreUsuario    // Participant's name
+    $request->tiempo_transcurrido // Time taken in seconds
+    $request->pruebaid         // Quiz ID
+    ```
+
+    Score is calculated as correct answers out of `total_questions - 2` (special questions are excluded from scoring). An `IndUsuarios` record is created:
+
+    ```php
+    IndUsuarios::create([
+        'id_correo'  => $request->correoUsuario,
+        'nombre'     => strtoupper($request->nombreUsuario),
+        'preguntas'  => collect($preguntas)->pluck('idpregunta')->toArray(),
+        'respuestas' => collect($preguntas)->pluck('idrespuesta')->toArray(),
+        'puntaje'    => $puntaje . '/' . (count($preguntas) - 2),
+        'fecha'      => now(),
+        'tiempo'     => $request->tiempo_transcurrido,
+        'prueba'     => $request->pruebaid,
+    ]);
+    ```
+
+    The user is shown the `indicators.quiz.resultadoquiz` view with a per-question breakdown.
+  </Step>
+</Steps>
+
+### Admin quiz dashboard
+
+`GET /indicators/quizes` (requires auth) shows all quiz submissions with aggregated stats. The controller computes:
+
+| Metric | Source |
+|---|---|
+| Users scoring > 3 | `IndUsuarios` where `CAST(SUBSTRING_INDEX(puntaje, '/', 1) AS UNSIGNED) > 3` |
+| Total employees | `GdoEmpleado` where `id > 11` |
+| Score distribution (1–5) | Parsed from `IndUsuarios.puntaje` |
+| Question 5 ratings (TIC Corpen) | Index `[5]` of each user's `respuestas` JSON |
+| Question 6 ratings (TIC Software) | Index `[6]` of each user's `respuestas` JSON (supports `'n/a'`) |
+
+These values populate the `$datacharts` array passed to the quiz admin view.
+
+## Report History
+
+Every successful call to `POST /indicators/generar/informe` creates a row in `ind_registro_informes`:
+
+```php
+IndRegistroInformes::create([
+    'archivo'         => 'corpentunida/indicators/' . $fileName,
+    'usuario'         => auth()->id(),
+    'fecha_descarga'  => now(),
+]);
+```
+
+The index page displays the most recent report date alongside a count of total records.
+
+<Note>
+  The quiz start page (`GET /indicators/quiz`) and all quiz submission routes (`GET /indicators/quiz/{prueba}/preguntas`, `POST /indicators/validarcorreo`, `POST /indicators/quiz/store`) are intentionally **outside** the `auth` middleware. This allows external participants — members, applicants, or trainees — to complete assessments without needing a Corpen platform account. Only the quiz management CRUD (`GET /indicators/quizes` and its resource routes) and the indicator CRUD and report download require authentication.
+</Note>
+
+<Tip>
+  The Indicators module is designed to integrate with the **`arielmejiadev/larapex-charts`** package already available in the project. You can extend the `IndicadoresController@index` view to render LarapexCharts bar or line charts using the `$ind->indicador_calculado` values alongside the parsed `meta` targets. The `parseMeta()` helper already handles common goal formats (`≥ 80%`, `≥ 4.2 / 5`, `≤ 6 horas`) and returns a normalized array with keys `op`, `valor`, and `unidad` that can drive chart threshold lines.
+</Tip>

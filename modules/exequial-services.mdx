@@ -1,0 +1,212 @@
+---
+title: "Exequial Services Module: Funeral Plan Management"
+sidebarTitle: "Exequial Services"
+description: "Document exequial (funeral) plan enrollment, service delivery tracking, beneficiary relationships, and PDF reporting in the Corpen Exequial module."
+---
+
+The Exequial Services module manages the full lifecycle of funeral plan membership for cooperative members. It covers enrollment of titulars (plan holders) and their beneficiaries, real-time service delivery records when a death occurs, statistical dashboards, and PDF/Excel exports. All routes are prefixed under `/exequiales` and guarded by the `auth` middleware.
+
+## Route Reference
+
+| Method | Path | Route Name | Controller | Description |
+|--------|------|-----------|------------|-------------|
+| `GET` | `/exequiales/asociados` | `exequial.asociados.index` | `ComaeExCliController@index` | List of exequial members |
+| `GET` | `/exequiales/asociados/create` | `exequial.asociados.create` | `ComaeExCliController@create` | New member form |
+| `POST` | `/exequiales/asociados` | `exequial.asociados.store` | `ComaeExCliController@store` | Enrol a new member |
+| `GET` | `/exequiales/asociados/{id}` | `exequial.asociados.show` | `ComaeExCliController@show` | Member profile with beneficiaries |
+| `GET` | `/exequiales/asociados/{id}/edit` | `exequial.asociados.edit` | `ComaeExCliController@edit` | Edit member form |
+| `PUT/PATCH` | `/exequiales/asociados/{id}` | `exequial.asociados.update` | `ComaeExCliController@update` | Update member record |
+| `GET` | `/exequiales/asociados/{id}/generarpdf/{active}` | `asociados.generarpdf` | `ComaeExCliController@generarpdf` | Download member PDF report |
+| `GET` | `/exequiales/prestarServicio` | `exequial.prestarServicio.index` | `MaeC_ExSerController@index` | List of service delivery records |
+| `GET` | `/exequiales/prestarServicio/dashboard` | `exequial.prestarServicio.dashboard` | `MaeC_ExSerController@dashboard` | Service statistics dashboard |
+| `GET` | `/exequiales/prestarServicio/excel` | `prestarServicio.generate.excel` | `MaeC_ExSerController@generarExcelPrestarServicio` | Export services to Excel |
+| `GET` | `/exequiales/prestarServicio/generarpdf` | `prestarServicio.generarpdf` | `MaeC_ExSerController@generarpdf` | Download all services PDF |
+| `POST` | `/exequiales/prestarServicio` | `exequial.prestarServicio.store` | `MaeC_ExSerController@store` | Register a new service delivery |
+| `GET` | `/exequiales/prestarServicio/{id}` | `exequial.prestarServicio.show` | `MaeC_ExSerController@edit` | View service record |
+| `PUT/PATCH` | `/exequiales/prestarServicio/{id}` | `exequial.prestarServicio.update` | `MaeC_ExSerController@update` | Update service record |
+| `GET` | `/exequiales/prestarServicio/{id}/generarpdf` | `prestarServicio.repIndividual` | `MaeC_ExSerController@reporteIndividual` | Individual service PDF |
+| `POST` | `/exequiales/prestarServicio/{id}/comentario` | `prestarServicio.comentario.store` | `MaeC_ExSerController@addComment` | Add a comment to a service record |
+| `GET` | `/exequiales/beneficiarios/create` | `exequial.beneficiarios.create` | `ComaeExRelParController@create` | New beneficiary form |
+| `POST` | `/exequiales/beneficiarios` | `exequial.beneficiarios.store` | `ComaeExRelParController@store` | Add a beneficiary |
+| `GET` | `/exequiales/beneficiarios/{id}/edit` | `exequial.beneficiarios.edit` | `ComaeExRelParController@edit` | Edit beneficiary form |
+| `PUT/PATCH` | `/exequiales/beneficiarios/{id}` | `exequial.beneficiarios.update` | `ComaeExRelParController@update` | Update beneficiary |
+| `DELETE` | `/exequiales/beneficiarios/{id}` | `exequial.beneficiarios.destroy` | `ComaeExRelParController@destroy` | Remove beneficiary |
+| `GET/POST` | `/exequiales/terceros` | `exequial.terceros.*` | `ComaeTerController` | Third-party person records (CRUD) |
+| `GET` | `/exequiales/parentescosall` | `exequial.parentescosall` | `ParentescosController@index` | List all relationship types |
+| `GET` | `/exequiales/plansall` | `exequial.plansall` | `PlanController@index` | List all funeral plans |
+
+## Data Models
+
+<Tabs>
+  <Tab title="EXE_CoMae_ExCli (Titulars)">
+    Stored in table `EXE_CoMae_ExCli`. Each row represents one active plan holder.
+
+    | Column | Type | Notes |
+    |--------|------|-------|
+    | `cod_cli` | `bigint` (PK) | Member's national ID (cédula) |
+    | `cod_plan` | `string(5)` | Funeral plan code |
+    | `fec_ing` | `date` | Enrolment date |
+    | `fec_ini` | `date` | Plan start date |
+    | `cod_cco` | `string(10)` | Cost centre code (e.g., `C1010`) |
+    | `por_descto` | `string(5)` | Discount percentage |
+    | `estado` | `boolean` | `true` = active plan holder |
+    | `benef` | `text` | Observations / beneficiary notes |
+    | `contrato` | `string(5)` | Contract reference |
+  </Tab>
+  <Tab title="EXE_CoMae_ExRelPar (Beneficiaries)">
+    Stored in table `EXE_CoMae_ExRelPar`. Each row links a dependent person to a titular.
+
+    | Column | Type | Notes |
+    |--------|------|-------|
+    | `cedula` | `bigint` (PK) | Beneficiary's national ID |
+    | `nombre` | `string` | Full name (stored in uppercase) |
+    | `cod_par` | `string(5)` | Relationship code (FK → parentescos) |
+    | `tipo` | `string(1)` | `A` = active, `I` = inactive (deceased) |
+    | `fec_ing` | `date` | Registration date |
+    | `fec_nac` | `date` | Date of birth |
+    | `estado` | `boolean` | Active status flag |
+    | `cod_cli` | `bigint` | Titular's cédula (FK → `EXE_CoMae_ExCli`) |
+  </Tab>
+  <Tab title="EXE_MAEC_EXSER (Services)">
+    Stored in table `EXE_MAEC_EXSER` (model: `ExMonitoria`). Records every funeral service event.
+
+    | Column | Type | Notes |
+    |--------|------|-------|
+    | `id` | `int` | Auto-increment PK |
+    | `fechaRegistro` | `datetime` | When the service was logged |
+    | `cedulaTitular` | `string` | Plan holder's cédula |
+    | `nombreTitular` | `string` | Plan holder's full name |
+    | `cedulaFallecido` | `string` | Deceased person's cédula |
+    | `nombreFallecido` | `string` | Deceased person's name (uppercase) |
+    | `fechaFallecimiento` | `date` | Date of death |
+    | `horaFallecimiento` | `time` | Time of death |
+    | `lugarFallecimiento` | `string` | Location of death (uppercase) |
+    | `parentesco` | `string` | Relationship code or `TITULAR` |
+    | `genero` | `string(1)` | `M` = male, `F` = female |
+    | `estado` | `int` | `1` = pending, `2` = in progress, `3` = closed |
+    | `contacto` | `string` | Primary contact name (uppercase) |
+    | `telefonoContacto` | `string` | Primary contact phone |
+    | `Contacto2` | `string` | Secondary contact name |
+    | `telefonoContacto2` | `string` | Secondary contact phone |
+    | `municipio` | `int` | FK → `MaeMunicipios.id` |
+  </Tab>
+</Tabs>
+
+## Enrolling a New Exequial Member
+
+<Steps>
+  <Step title="Open the enrolment form">
+    Navigate to `GET /exequiales/asociados/create`. The form loads the list of available funeral plans from `PlanController@index`. You need the member's cédula (national ID) ready before proceeding.
+  </Step>
+  <Step title="Validate the member exists in the directory">
+    The controller calls the internal `validarRegistro` method on submission. It checks:
+    - `ComaeExCli` (local table) — returns `1` if the cédula already has an active exequial plan.
+    - `ComaeTer` (third-parties table) — returns `2` if the person is in the directory but not yet enrolled.
+    - Returns `0` if the cédula is not found anywhere.
+
+    If the cédula is not yet enrolled (`0` or `2`), proceed to store.
+  </Step>
+  <Step title="Submit the enrolment">
+    `POST /exequiales/asociados` sends the following payload to the production API at `POST /api/Exequiales/Tercero`:
+
+    ```php
+    [
+        'documentId'     => $request->documentId,
+        'obsevations'    => $request->observaciones,
+        'dateStart'      => Carbon::now(),
+        'descuento'      => $request->discount,
+        'codePlan'       => $request->plan,
+        'codeCenterCost' => 'C1010',
+    ]
+    ```
+
+    Simultaneously, the controller creates a local record in `EXE_CoMae_ExCli`:
+
+    ```php
+    ComaeExCli::create([
+        'cod_cli'    => $request->documentId,
+        'cod_plan'   => $request->plan,
+        'fec_ing'    => Carbon::now(),
+        'cod_cco'    => 'C1010',
+        'estado'     => true,
+        'fec_ini'    => Carbon::now(),
+        'por_descto' => $request->discount,
+    ]);
+    ```
+
+    On API success, the user is redirected to the member's show page and the action is recorded in the Auditoría log as `add titular {documentId}`.
+  </Step>
+</Steps>
+
+## Delivering a Funeral Service
+
+<Steps>
+  <Step title="Open the service registration form">
+    From the member's show page, click **Prestar Servicio** to reach `POST /exequiales/prestarServicio`. The form requires identifying whether the deceased is the **titular** (plan holder) or a **beneficiary**.
+  </Step>
+  <Step title="Identify the deceased">
+    - **If the titular died** (`pastor === 'true'`): the controller sends a `PATCH` to `/api/Exequiales/Tercero` setting `stade: false` and the observation `'PASTOR FALLECIDO'`, then updates `EXE_CoMae_ExCli` to set `estado = false`.
+    - **If a beneficiary died**: the controller sends a `PUT` to `/api/Exequiales/Beneficiary` with `type: 'I'` (inactive), and updates `EXE_CoMae_ExRelPar` to set `estado = false, tipo = 'I'`.
+  </Step>
+  <Step title="Complete and save the service record">
+    On API success, `ExMonitoria::create()` persists the full record to `EXE_MAEC_EXSER` with all death details, contact information, municipality, and the initial `estado = 1` (pending). The action is logged in Auditoría as `prestar servicio a {cedulaFallecido}`.
+  </Step>
+  <Step title="Track and update the service">
+    Navigate to `GET /exequiales/prestarServicio/{id}` to edit the service record. You can update:
+    - `horaFallecimiento`, `fechaFallecimiento`, `lugarFallecimiento`
+    - Contact information (`contacto`, `telefonoContacto`, `Contacto2`, `telefonoContacto2`)
+    - `municipio` (linked to `MaeMunicipios`)
+
+    Add timeline notes via `POST /exequiales/prestarServicio/{id}/comentario`, which saves to `ExServicioComentarios` with a `tipo` and `observacion`.
+  </Step>
+</Steps>
+
+## Adding a Beneficiary
+
+To add a dependent to an existing plan holder's record:
+
+1. From the member's show page, click **Agregar Beneficiario**.
+2. The `create` form loads available `parentescos` from `ParentescosController@index`.
+3. `POST /exequiales/beneficiarios` sends a `POST` request to `/api/Exequiales/Beneficiary` and simultaneously creates a `ComaeExRelPar` record with `tipo = 'A'` (active).
+4. On success, the action is logged as `add beneficiario {documentid}`.
+
+## PDF Generation
+
+Corpen uses **Barryvdh DomPDF** for all PDF output in this module:
+
+| Endpoint | Description | Paper |
+|----------|-------------|-------|
+| `GET /exequiales/asociados/{id}/generarpdf/true` | Member certificate with plan and beneficiaries (active format) | Letter, landscape |
+| `GET /exequiales/asociados/{id}/generarpdf/false` | Alternate member report template | Letter, landscape |
+| `GET /exequiales/prestarServicio/generarpdf` | Full services report (all records) | Letter, landscape |
+| `GET /exequiales/prestarServicio/{id}/generarpdf` | Individual service delivery report | Letter, landscape |
+
+The `active` path parameter in `generarpdf/{active}` is evaluated with `filter_var($active, FILTER_VALIDATE_BOOLEAN)`. Passing `true` uses the view `exequial.asociados.showpdf`; passing `false` uses `exequial.asociados.showpdf2`.
+
+Each PDF request fetches data from the production API using a `Bearer` token from `env('TOKEN_ADMIN')` and `env('API_PRODUCCION')`, combining titular details, beneficiary list, and pastor personal data into a single printable document.
+
+## Excel Export (Service Deliveries)
+
+`GET /exequiales/prestarServicio/excel` exports all `ExMonitoria` records via **Maatwebsite Excel** using the `ExcelExport` class. The generated file is named `{timestamp}Prestar_Servicio.xlsx` and contains the following columns:
+
+| # | Column | Source |
+|---|--------|--------|
+| 1 | Nº | Row index |
+| 2 | Fecha Fallecimiento | `fechaFallecimiento` |
+| 3 | Día | `Carbon::translatedFormat('l')` (Spanish weekday) |
+| 4 | Hora | `horaFallecimiento` |
+| 5 | Cédula Titular | `cedulaTitular` |
+| 6 | Nombre Titular | `nombreTitular` |
+| 7 | Cédula Fallecido | `cedulaFallecido` |
+| 8 | Nombre Fallecido | `nombreFallecido` |
+| 9 | Lugar Fallecimiento | `lugarFallecimiento` |
+| 10 | Parentesco | Resolved name via `ParentescosController@showName` |
+| 11 | Contacto | `contacto` |
+| 12 | Teléfono | `telefonoContacto` |
+| 13 | Estado | `PENDIENTE` / `EN PROCESO` / `CERRADO` |
+
+## Service Dashboard
+
+<Tip>
+The dashboard at `GET /exequiales/prestarServicio/dashboard` provides management-level KPIs sourced entirely from the database — no API call is required. It shows total services delivered, services grouped by district (joining `EXE_MAEC_EXSER → MaeTerceros → MaeDistritos`), the top 15 municipalities by service volume, total active beneficiaries (`EXE_ExRelPar` where `tipo = 'A'`), total active plan holders (`EXE_ExCli` where `estado = 1`), and an audit breakdown showing the percentage of add, update, delete, and service-delivery actions from the Auditoría log for the EXEQUIALES area.
+</Tip>

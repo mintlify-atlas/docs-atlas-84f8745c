@@ -1,0 +1,186 @@
+---
+title: "Workflows Module: Task Management and Project Boards"
+sidebarTitle: "Workflows"
+description: "Create workflows, assign tasks, track task history and comments, and view project boards in Corpen's Flujo module."
+---
+
+The Flujo module brings structured project and task management to Corpen. Workflows (proyectos) act as containers for ordered task lists, each with priority levels, deadlines, progress tracking, and team membership. State transitions on tasks are automatically recorded in `TaskHistory`, and every participant can add comments. The Tablero provides a unified Kanban-style board across all active workflows. All routes are grouped under `/flujo` with `auth` middleware.
+
+## Sub-resources
+
+| Controller | Route | Purpose |
+|---|---|---|
+| `WorkflowController` | `/flujo/workflows` | Workflow CRUD, team management, PDF export |
+| `TaskController` | `/flujo/tasks` | Task CRUD within workflows; state-change history recording |
+| `TaskHistoryController` | `/flujo/histories` | Task state transition history (index, show, store, destroy) |
+| `TaskCommentController` | `/flujo/comments` | Comments on individual tasks |
+| `TableroController` | `/flujo/tablero` | Unified Kanban board: workflows, recent tasks, histories, comments |
+| `AuditoriaProyectosController` | `/flujo/auditoria` | Project audit trail with PDF export |
+
+## Route Reference
+
+```
+# Workflows
+GET    /flujo/workflows                          flujo.workflows.index
+GET    /flujo/workflows/create                   flujo.workflows.create
+POST   /flujo/workflows                          flujo.workflows.store
+GET    /flujo/workflows/{workflow}               flujo.workflows.show
+GET    /flujo/workflows/{workflow}/edit          flujo.workflows.edit
+PUT    /flujo/workflows/{workflow}               flujo.workflows.update
+DELETE /flujo/workflows/{workflow}               flujo.workflows.destroy
+GET    /flujo/workflows/{workflow}/pdf           flujo.workflows.pdf
+PUT    /flujo/workflows/{workflow}/update-team   flujo.workflows.updateTeam  (AJAX)
+
+# Tasks
+GET    /flujo/tasks                              flujo.tasks.index
+GET    /flujo/tasks/create                       flujo.tasks.create
+POST   /flujo/tasks                              flujo.tasks.store
+GET    /flujo/tasks/{task}                       flujo.tasks.show
+GET    /flujo/tasks/{task}/edit                  flujo.tasks.edit
+PUT    /flujo/tasks/{task}                       flujo.tasks.update
+DELETE /flujo/tasks/{task}                       flujo.tasks.destroy
+
+# Histories & Comments
+GET/POST/DELETE  /flujo/histories                flujo.histories.* (index, show, store, destroy)
+GET/POST/PUT/DELETE /flujo/comments              flujo.comments.*  (full resource)
+
+# Tablero and Audit
+GET  /flujo/tablero                              flujo.tablero
+GET  /flujo/auditoria                            flujo.auditoria.index
+GET  /flujo/auditoria/pdf                        flujo.auditoria.pdf
+```
+
+## Database Tables
+
+| Table | Model | Purpose |
+|---|---|---|
+| `wor_workflows` | `Workflow` | Workflow/project definitions |
+| `wor_tasks` (migration: `tasks`) | `Task` | Individual task records |
+| `wor_task_histories` (migration: `task_histories`) | `TaskHistory` | State change log per task |
+| `wor_task_comments` (migration: `task_comments`) | `TaskComment` | Comments per task |
+| `wor_usuarios` | `WorUsuario` | Pivot: users assigned to workflows |
+
+## Models and Relationships
+
+**`Workflow`** fields: `nombre`, `descripcion`, `estado`, `prioridad`, `fecha_inicio`, `fecha_fin`, `creado_por`, `asignado_a`, `activo`, `es_plantilla`, `configuracion` (JSON), `modificado_por`.
+
+Valid `estado` values: `Activo`, `Archivado`, `Pausado`, `Completo`.
+Valid `prioridad` values: `baja`, `media`, `alta`.
+
+**`Task`** fields: `titulo`, `descripcion`, `estado`, `prioridad`, `fecha_limite`, `user_id`, `workflow_id`, `configuracion` (JSON).
+
+Valid task `estado` values: `pendiente`, `en_proceso`, `revisado`, `completado`.
+Valid task `prioridad` values: `baja`, `media`, `alta`, `crítica`.
+
+**User–Workflow relationship**: `$user->workflows()` is a `belongsToMany` through the `wor_usuarios` pivot table. Team members are synced via `$workflow->participantes()->sync($ids)` from `PUT /flujo/workflows/{workflow}/update-team`.
+
+## Setting Up a Workflow with Tasks
+
+<Steps>
+  <Step title="Create the workflow">
+    Navigate to `GET /flujo/workflows/create`. Fill in `nombre`, choose `estado` (start with `Activo`), set `prioridad`, and optionally add `fecha_inicio` and `fecha_fin` for deadline tracking. Assign a primary responsible user via `asignado_a`.
+
+    ```php
+    // Validation rules for workflow store
+    'nombre'       => 'required|string|max:255',
+    'estado'       => 'required|in:Activo,Archivado,Pausado,Completo',
+    'prioridad'    => 'required|in:baja,media,alta',
+    'fecha_inicio' => 'nullable|date',
+    'fecha_fin'    => 'nullable|date|after_or_equal:fecha_inicio',
+    'creado_por'   => 'required|exists:users,id',
+    'asignado_a'   => 'nullable|exists:users,id',
+    ```
+  </Step>
+
+  <Step title="Assign team members">
+    From the workflow detail view at `GET /flujo/workflows/{workflow}`, use the team panel to select participants. Submit the AJAX call:
+
+    ```
+    PUT /flujo/workflows/{workflow}/update-team
+    Body: { participantes: [1, 5, 12] }
+    ```
+
+    `$workflow->participantes()->sync($ids)` adds new members and removes those not in the array atomically.
+  </Step>
+
+  <Step title="Create tasks">
+    Open `GET /flujo/tasks/create?workflow_id={id}` (the `workflow_id` query parameter pre-selects the project in the form). Submit `POST /flujo/tasks`:
+
+    ```php
+    // Validation rules for task store
+    'titulo'       => 'required|string|max:255',
+    'estado'       => 'required|in:pendiente,en_proceso,revisado,completado',
+    'prioridad'    => 'required|in:baja,media,alta,crítica',
+    'user_id'      => 'required|exists:users,id',
+    'workflow_id'  => 'required|exists:wor_workflows,id',
+    'fecha_limite' => 'nullable|date',
+    ```
+
+    After creation, the controller redirects back to `flujo.workflows.show` for the parent workflow rather than the generic task index.
+  </Step>
+
+  <Step title="Move tasks through states">
+    Edit a task at `GET /flujo/tasks/{task}/edit` and change `estado`. On save, the controller detects the state change and automatically writes a `TaskHistory` record:
+
+    ```php
+    if ($estadoAnterior !== $data['estado']) {
+        TaskHistory::create([
+            'task_id'         => $task->id,
+            'estado_anterior' => $estadoAnterior,
+            'estado_nuevo'    => $data['estado'],
+            'cambiado_por'    => Auth::id(),
+            'fecha_cambio'    => now(),
+        ]);
+    }
+    ```
+
+    Redirection is dynamic: if a `redirect_to` hidden input is present in the form, the controller uses that path; otherwise it falls back to `flujo.tasks.index`.
+  </Step>
+
+  <Step title="Add comments to tasks">
+    Comments are submitted to `POST /flujo/comments` with a `task_id` reference. They are displayed in the workflow detail view alongside the `TaskHistory` entries in a unified `auditEvents` collection, sorted by `created_at` descending.
+  </Step>
+
+  <Step title="Export the workflow report">
+    Call `GET /flujo/workflows/{workflow}/pdf`. The controller fetches Chart.js pie and bar chart images via the `quickchart.io` API (Base64 encoded), computes KPIs (total tasks, completed, pending, days active, remaining days / overdue), and streams a DomPDF A4 portrait report.
+  </Step>
+</Steps>
+
+<Note>
+The **Tablero** at `GET /flujo/tablero` is a Kanban-style project board. It paginates across all workflows (15 per page), loads the three most recent tasks, four most recent history entries, and four most recent comments in a single view. It also pre-loads `estados` and `prioridades` options for any inline quick-create interactions. It does not filter by user—all active workflows are visible to authenticated users who can reach this route.
+</Note>
+
+<Tip>
+Use `GET /flujo/auditoria` to review the full project audit trail across all workflows. Every `TaskHistory` and `TaskComment` record is surfaced here, filterable by project or user. Export it as a PDF via `GET /flujo/auditoria/pdf` to produce a timestamped compliance record for cooperative governance reviews. The workflow-level PDF from `GET /flujo/workflows/{workflow}/pdf` also includes an audit events table limited to the 50 most recent entries for that project.
+</Tip>
+
+## Workflow Dashboard and Progress
+
+The workflow index at `GET /flujo/workflows` computes a progress percentage for each workflow in the paginated collection:
+
+```php
+$wf->progreso = $wf->tasks_count > 0
+    ? round(($wf->task_check_count / $wf->tasks_count) * 100)
+    : 0;
+```
+
+`task_check_count` is the eager-loaded count of tasks where `estado = 'completado'`. The dashboard also provides:
+
+- **Global state counts** (`globalCounts`): total workflows grouped by state, always unfiltered.
+- **Filtered state distribution** (`filteredCounts`): same grouping applied to the current search/filter.
+- **Compliance metrics** (`cumplimiento`): counts of on-time (active, `fecha_fin >= now()`), overdue (active, `fecha_fin < now()`), and completed workflows.
+- **Leader load** (`leadersData`): workflow count per `asignado_a` user for capacity visibility.
+
+## Bulk Filtering
+
+The task index at `GET /flujo/tasks` supports four independent query filters that can be combined:
+
+| Parameter | Effect |
+|---|---|
+| `search` | Matches `titulo` or `descripcion` (LIKE) |
+| `estado` | Exact match on task state |
+| `prioridad` | Exact match on task priority |
+| `user_id` | Tasks assigned to a specific user |
+| `workflow_id` | Tasks belonging to a specific workflow |
+
+When the request is AJAX (`$request->ajax()`), the controller returns only the `tasks-list` Blade fragment rather than the full page layout.

@@ -1,0 +1,251 @@
+---
+title: "Corpen Platform Architecture and Module Overview"
+sidebarTitle: "Architecture"
+description: "Explore how Corpen organizes its modules, data flows, permission layers, and integrations across the Laravel application structure."
+---
+
+Corpen follows a classic **MVC architecture** on top of Laravel 11, extended with Livewire 3 for reactive components and Blade for server-rendered views. Every feature domain is organized as a self-contained module: its own route group with a URL prefix, a dedicated `Controllers/` subdirectory, a mirrored `Models/` subdirectory, and a matching `resources/views/` subtree. There is no micro-service boundary or API gateway — all modules share one database, one authentication session, and one Spatie permission store, which is the key design choice that allows cross-module data lookups (e.g., an `Interaction` can reference the same `MaeTerceros` record that an insurance policy uses).
+
+## High-Level Architecture
+
+```
+Browser / PWA client
+       │
+       ▼
+   Apache (port 80 in container, 83 on host)
+       │
+       ▼
+   Laravel 11 HTTP Kernel
+   ├── Global middleware: TrustHosts, TrustProxies, StartSession
+   ├── Web group: EncryptCookies, AddQueuedCookiesToResponse, SubstituteBindings
+   ├── Route middleware aliases:
+   │   ├── auth          → Illuminate\Auth\Middleware\Authenticate
+   │   ├── can           → Illuminate\Auth\Middleware\Authorize
+   │   └── candirect     → App\Http\Middleware\CanDirect  ← custom
+       │
+       ▼
+   Route groups (web.php — 1 266 lines)
+   Each module: Route::prefix(…)->middleware(['auth'])->group(…)
+       │
+       ▼
+   Controllers (app/Http/Controllers/<Module>/)
+       │
+       ├── Eloquent Models (app/Models/<Module>/)
+       ├── Exports/Imports (app/Exports/, app/Imports/)
+       ├── Livewire components (resources/views/livewire/ if present)
+       └── Blade views (resources/views/<module>/)
+```
+
+Vite compiles `resources/css/app.css` and `resources/js/app.js` into versioned bundles under `public/build/`. Tailwind CSS (with `@tailwindcss/forms` and `@tailwindcss/typography`) is configured to scan all Blade files and Jetstream vendor views. The font stack defaults to **Figtree** via a `theme.extend.fontFamily.sans` override.
+
+---
+
+## Module Reference
+
+The table below maps every module to its URL prefix, primary controller namespace, and representative key routes derived from `routes/web.php`.
+
+<Note>
+  The `candirect` middleware alias (registered in `app/Http/Kernel.php`) maps to `App\Http\Middleware\CanDirect`. Unlike the standard `can:` guard which checks role-inherited permissions, `CanDirect` calls `$user->getDirectPermissions()` and matches **only explicitly assigned direct permissions** for the authenticated user. If none of the passed permission names appear in the user's direct permissions, the middleware aborts with a `404 — Página no encontrada` response. This makes sensitive module entry points (e.g., `candirect:seguros.poliza.index`, `candirect:correspondencia.usuario.admin`) invisible rather than forbidden, preventing enumeration of restricted features.
+</Note>
+
+### Core & Member Management
+
+| Module | URL Prefix | Controller Namespace | Key Named Routes |
+|---|---|---|---|
+| **Dashboard** | `/` | `IndexController` | `dashboard` |
+| **Associates** | `/asociados` | `Asociado\MaeAsociadoController` | `asociados.dashboard`, `asociados.maestro.*`, `asociados.ecm.index`, `asociados.sincronizar.*` |
+| **Demographics** | `/demograficos` | `Demografia\DemografiaController` | `demograficos.dashboard`, `demograficos.maestro.*`, `demograficos.sincronizar.*` |
+| **Master Data** | `/maestras` | `Maestras\Mae*Controller` | `maestras.terceros.*`, `maestras.tipos.*`, `maestras.congregacion.*`, `maestras.departamentos.listar`, `maestras.municipios.listar` |
+| **Admin** | `/users`, `/roles`, `/permisos` | `Admin\UserController`, `Admin\RoleController`, `Admin\PermissionsController` | `admin.users.*`, `admin.roles.*`, `admin.permisos.*`, `admin.auditoria.*` |
+
+### Finance
+
+| Module | URL Prefix | Controller Namespace | Key Named Routes |
+|---|---|---|---|
+| **Accounting** | `/contabilidad` | `Contabilidad\ConCuentaBancariaController`, `ConExtractoTransaccionController`, `ExcelSyncController` | `contabilidad.cuentas-bancarias.*`, `contabilidad.extractos.*`, `contabilidad.extractos.conciliacion`, `contabilidad.sincronizar.*`, `contabilidad.mantenimiento` |
+| **Portfolio (Cartera)** | `/cartera` | `Cartera\CarComprobantePagoController`, `ReadExelController` | `cartera.comprobantes.*`, `cartera.morosos.index`, `cartera.morosos.pdfMora` |
+| **Collections (Recaudo)** | `/recaudo` | `Recaudo\RecImputacionContableController` | `recaudo.imputaciones.*`, `recaudo.buscar-distrito` |
+| **Credits** | `/creditos` | `Creditos\CreditoController` | `creditos.credito.*` |
+| **Five-Percent Fund** | `/cinco`, `/retiros` | `Cinco\TercerosController`, `MoviContCincoController`, `RetirosListadoController`, `CondicionesRetirosController` | `cinco.tercero.*`, `cinco.movcontables.*`, `cinco.reportepdf`, `cinco.retiros.*`, `cinco.condicionRetiros.*`, `cinco.liquidacionretiro` |
+
+### Operations
+
+| Module | URL Prefix | Controller Namespace | Key Named Routes |
+|---|---|---|---|
+| **Exequial** | `/exequiales` | `Exequial\ComaeExCliController`, `MaeC_ExSerController`, `ComaeTerController`, `ComaeExRelParController` | `exequial.asociados.*`, `exequial.prestarServicio.*`, `exequial.beneficiarios.*`, `exequial.terceros.*`, `asociados.generarpdf`, `prestarServicio.generate.excel` |
+| **Insurance** | `/seguros` | `Seguros\SegPolizaController`, `SegPlanController`, `SegBeneficiarioController`, `SegCoberturaController`, `SegConvenioController`, `SegReclamacionesController`, `SegNovedadesController`, `SegBeneficiosController`, `SegCondicionesController` | `seguros.poliza.*`, `seguros.planes.*`, `seguros.cobertura.*`, `seguros.beneficiario.*`, `seguros.convenio.*`, `seguros.reclamacion.*`, `seguros.novedades.*`, `seguros.beneficios.*`, `seguros.reclamaciones.dashboard` |
+| **Reservations** | `/reservas` | `Reservas\ResReservaController`, `ResInmuebleController`, `ResDashboardController` | `reserva.dashboard`, `reserva.reserva.*`, `reserva.crudinmuebles.*`, `reserva.inmueble.confirmacion`, `reserva.inmueble.historico`, `reserva.reservas.pago` |
+| **Inventory** | `/inventario` | `Inventario\ActivoController`, `CompraController`, `MovimientoController`, `MantenimientoController`, `MarcaController`, `BodegaController`, `EstadoController`, `MetodoPagoController`, `ClasificacionController`, `TableroInventarioController` | `inventario.tablero`, `inventario.activos.*`, `inventario.compras.*`, `inventario.movimientos.*`, `inventario.mantenimientos.*`, `inventario.marcas.*`, `inventario.bodegas.*`, `inventario.clasificacion.*` |
+
+### Document & Correspondence
+
+| Module | URL Prefix | Controller Namespace | Key Named Routes |
+|---|---|---|---|
+| **Document Archive** | `/archivo` | `Archivo\GdoCargoController`, `GdoAreaController`, `GdoEmpleadoController`, `GdoTipoDocumentoController`, `GdoCategoriaDocumentoController`, `GdoFuncionController` | `archivo.cargo.*`, `archivo.area.*`, `archivo.empleado.*`, `archivo.gdotipodocumento.*`, `archivo.categorias.*`, `archivo.funcion.*` |
+| **Correspondence** | `/correspondencia` | `Correspondencia\CorrespondenciaController`, `FlujoDeTrabajoController`, `ProcesoController`, `TrdController`, `PlantillaController`, `ComunicacionSalidaController`, `CorrespondenciaProcesoController`, `CorrEstadoController`, `MedioRecepcionController` | `correspondencia.tablero`, `correspondencia.correspondencias.*`, `correspondencia.flujos.*`, `correspondencia.procesos.*`, `correspondencia.trds.*`, `correspondencia.plantillas.*`, `correspondencia.comunicaciones-salida.*`, `correspondencia.medios-recepcion.*` |
+| **Workflow Engine (Flujo)** | `/flujo` | `Flujo\WorkflowController`, `TaskController`, `TaskHistoryController`, `TaskCommentController`, `TableroController`, `AuditoriaProyectosController` | `flujo.tablero`, `flujo.workflows.*`, `flujo.tasks.*`, `flujo.histories.*`, `flujo.comments.*`, `flujo.auditoria.index`, `flujo.auditoria.pdf` |
+
+### CRM & Engagement
+
+| Module | URL Prefix | Controller Namespace | Key Named Routes |
+|---|---|---|---|
+| **CRM Interactions** | `/interactions` | `Interacciones\InteractionController`, `IntChannelController`, `IntTypeController`, `IntOutcomeController`, `IntNextActionController`, `IntSeguimientoController`, `IntWorkspaceController`, `IntConversationController`, `IntMessageController`, `IntChatController` | `interactions.index`, `interactions.report`, `interactions.chat.index`, `interactions.channels.*`, `interactions.types.*`, `interactions.outcomes.*`, `interactions.next_actions.*`, `interactions.workspaces.*`, `interactions.conversations.*`, `interactions.messages.*` |
+| **Visits** | `/visitas` | `Vistas\VisitaCorpenController` | `visitas.tablero`, `visitas.corpen.*`, `visitas.cliente.buscar` |
+| **Support Tickets** | `/soportes` | `Soportes\ScpSoporteController`, `ScpEstadoController`, `ScpPrioridadController`, `ScpTipoController`, `ScpCategoriaController`, `ScpUsuarioController`, `ScpNotificacionController`, `ScpEstadisticaController`, `ScpTableroParametroController` | `soportes.tablero`, `soportes.estadisticas`, `soportes.soportes.*`, `soportes.pendientes`, `soportes.mis-soportes`, `soportes.sinAsignar`, `soportes.categorias.*`, `soportes.estados.*`, `soportes.prioridades.*`, `soportes.tipos.*` |
+| **Indicators & Quizzes** | `/indicators` | `Indicators\QuizController`, `IndicadoresController` | `indicators.quiz.inicio`, `indicators.quiz.preguntas`, `indicators.quizes.*`, `indicators.indicadores.*`, `indicators.indicadores.descargar` |
+
+---
+
+## Folder Structure
+
+```
+app/
+├── Actions/
+│   ├── Fortify/          # Jetstream/Fortify authentication actions
+│   └── Jetstream/        # Profile photo, team actions
+├── Console/
+│   ├── Kernel.php
+│   └── Commands/
+│       └── Reservas/     # Scheduled commands for reservation auto-cancellation
+├── Enums/
+│   ├── AcuerdoEstadoEnum.php
+│   └── NotificacionEstadoEnum.php
+├── Exports/
+│   ├── Asociado/
+│   ├── Demografia/
+│   ├── ReporteSiniestrosExport.php
+│   └── TransaccionesExport.php
+├── Http/
+│   ├── Controllers/      # One subdirectory per module (see table above)
+│   ├── Middleware/
+│   │   └── CanDirect.php # Custom direct-permission guard
+│   └── Requests/
+├── Imports/
+│   ├── Asociado/
+│   ├── Cartera/
+│   ├── Contabilidad/
+│   ├── Demografia/
+│   ├── ExcelExport.php
+│   ├── ExcelImport.php
+│   └── PolizasImport.php
+├── Mail/
+│   ├── FlujoNotificacion.php
+│   ├── ReservaInmueble.php
+│   └── SoporteEscaladoMail.php
+├── Models/               # Mirroring controller namespaces:
+│   ├── Archivo/          # GdoArea, GdoCargo, GdoEmpleado, GdoFuncion, GdoTipoDocumento…
+│   ├── Asociado/         # MaeAsociado
+│   ├── Cartera/          # CarComprobantePago, Acuerdo
+│   ├── Cinco/            # MoviContCinco, Retiros, Terceros, CuentasContables…
+│   ├── Contabilidad/     # ConCuentaBancaria, ConExtractoTransaccion
+│   ├── Correspondencia/  # Correspondencia, FlujoDeTrabajo, Proceso, Plantilla, Trd, ComunicacionSalida…
+│   ├── Creditos/         # Credito, LineaCredito, Garantia, Etapa, Escritura…
+│   ├── Demografia/
+│   ├── Exequiales/
+│   ├── Flujo/            # Workflow, Task, TaskHistory, TaskComment
+│   ├── Indicators/
+│   ├── Interacciones/    # Interaction, IntChannel, IntType, IntOutcome, IntNextAction…
+│   ├── Inventario/       # InvActivo, InvCompra, InvMovimiento, InvMantenimiento…
+│   ├── Maestras/         # MaeTerceros, MaeTipos, MaeCongregacion, MaeMunicipios
+│   ├── Recaudo/
+│   ├── Reserva/          # Res_reserva, Res_inmueble, Res_status, Res_condicion…
+│   ├── Seguros/          # SegPoliza, SegPlan, SegBeneficiario, SegCobertura, SegConvenio, SegReclamaciones…
+│   ├── Soportes/         # ScpSoporte, ScpCategoria, ScpEstado, ScpPrioridad, ScpTipo…
+│   ├── Tesoreria/        # Pago
+│   ├── Vistas/           # VisitaCorpen
+│   ├── User.php          # Uses HasRoles, HasApiTokens, Notifiable
+│   ├── Role.php
+│   ├── Permisos.php
+│   ├── Action.php
+│   └── auditoria.php
+├── Policies/
+│   └── UserPolicy.php
+├── Providers/
+│   ├── AppServiceProvider.php
+│   ├── AuthServiceProvider.php
+│   ├── FortifyServiceProvider.php
+│   └── JetstreamServiceProvider.php
+└── Services/
+    └── GoogleDriveService.php
+```
+
+---
+
+## Role-Based Access Control
+
+Corpen uses **Spatie Laravel Permission 6.9** for its permission model. The `User` model mixes in the `HasRoles` trait:
+
+```php
+// app/Models/User.php
+use Spatie\Permission\Traits\HasRoles;
+
+class User extends Authenticatable
+{
+    use HasApiTokens;
+    use Notifiable;
+    use HasRoles;
+    // ...
+}
+```
+
+The seeder creates five base roles:
+
+```php
+// database/seeders/RoleSeeder.php
+Role::create(['name' => 'admin']);
+Role::create(['name' => 'exequial']);
+Role::create(['name' => 'creditos']);
+Role::create(['name' => 'seguros']);
+Role::create(['name' => 'read']);
+```
+
+Route-level enforcement uses two complementary guards:
+
+- **`can:` middleware** — standard Spatie gate check; passes when the user holds the permission directly **or** via a role.
+- **`candirect:` middleware** — custom `CanDirect` class; passes only when the named permission appears in `getDirectPermissions()`. Used for high-sensitivity entry points like `candirect:admin.users.index`, `candirect:seguros.poliza.index`, and `candirect:correspondencia.usuario.admin`.
+
+<Note>
+  The `CanDirect` middleware aborts with `404` (not `403`) when access is denied. This is a deliberate security design: unauthorized users see a "page not found" response rather than a "forbidden" response, preventing role and permission enumeration through the HTTP status code. The logic lives in `app/Http/Middleware/CanDirect.php` and is registered as the `candirect` alias in `app/Http/Kernel.php`.
+</Note>
+
+The `actions` table joins users to roles for the `IndexController` redirect logic. The `model_has_permissions` and `model_has_roles` tables (Spatie standard schema, created by migration `2024_11_05_135024_create_permission_tables.php`) drive all middleware checks at runtime.
+
+---
+
+## Storage & Cloud Integrations
+
+Corpen supports three storage backends, configured via the `FILESYSTEM_DISK` environment variable and the standard Laravel `config/filesystems.php` disks:
+
+| Driver | Package | Used By |
+|---|---|---|
+| `local` | Laravel built-in | Development, view caches |
+| `s3` | `league/flysystem-aws-s3-v3` 3.0 | Document Archive (`archivo`), Inventory (`inventario`), Cartera — employee photos, function manuals, purchase invoices, movement acts |
+| Google Cloud Storage | `google/cloud-storage` 1.48 | `GoogleDriveService` in `app/Services/` |
+| SFTP | `league/flysystem-sftp-v3` 3.0 | Optional alternative storage target |
+
+The AWS S3 disk is configured with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_BUCKET`, and optionally `AWS_ENDPOINT` for custom S3-compatible endpoints. The `GdoEmpleadoController::verFoto()` method generates signed S3 URLs to serve private employee profile photos without exposing bucket credentials.
+
+---
+
+## Export, Import, and PDF Generation
+
+| Capability | Package | Example Usage |
+|---|---|---|
+| Excel export | `maatwebsite/excel` 3.1 | `ReporteSiniestrosExport`, `TransaccionesExport`, associate and demographic exports, policy benefit reports |
+| Excel import | `maatwebsite/excel` + `phpoffice/phpspreadsheet` | `PolizasImport`, cartera morosos upload, asociado/demographic mass sync |
+| PDF generation | `barryvdh/laravel-dompdf` 2.2 | Exequial service PDFs, insurance claim reports, credit documents, inventory asset sheets, correspondence history PDFs, workflow audit PDFs |
+| Charts | `arielmejiadev/larapex-charts` 2.1 | Support ticket statistics dashboard, inventory tablero, interaction reports |
+
+---
+
+## Progressive Web App
+
+The PWA manifest is managed by `silviolleite/laravelpwa` 2.0. Corpen registers a service worker and manifest at the application level. An offline fallback is served at:
+
+```php
+Route::get('/offline', function () {
+    return view('vendor.laravelpwa.offline');
+});
+```
+
+This route is intentionally outside the `auth` middleware group so that installed PWA clients can render an offline page without an active session, which is important for field agents with intermittent connectivity.

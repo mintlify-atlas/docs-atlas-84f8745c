@@ -1,0 +1,255 @@
+---
+title: "PDF Report Generation in Corpen with DomPDF"
+sidebarTitle: "PDF Reports"
+description: "Generate downloadable PDF reports for exequial services, insurance claims, accounting movements, correspondence, and more using Corpen's DomPDF integration."
+---
+
+Corpen generates downloadable PDF reports across more than a dozen modules — exequial service records, five-percent accounting statements, insurance claims, correspondence history, workflow audits, indicators dashboards, and more. All PDFs are produced by the `barryvdh/laravel-dompdf` ^2.2 package, which renders a Blade view to a PDF byte stream that is either downloaded directly to the user's browser or stored on S3 before downloading.
+
+## Installed Package
+
+```json
+"barryvdh/laravel-dompdf": "^2.2"
+```
+
+The package registers the `Barryvdh\DomPDF\Facade\Pdf` facade (aliased as `Pdf`) automatically via Laravel's package discovery. The full configuration is published to `config/dompdf.php`.
+
+## Default DomPDF Configuration
+
+Corpen ships with the following defaults in `config/dompdf.php`:
+
+| Option | Value |
+|---|---|
+| `default_paper_size` | `a4` |
+| `default_paper_orientation` | `portrait` |
+| `default_font` | `serif` |
+| `dpi` | `96` |
+| `pdf_backend` | `CPDF` |
+| `enable_remote` | `true` (allows loading external images) |
+| `enable_php` | `false` |
+| `font_dir` / `font_cache` | `storage/fonts/` |
+| Custom font | `Corinthia-Regular.ttf` (signature rendering) |
+
+<Tip>
+Individual controller actions override the paper size and orientation by calling `->setPaper('letter', 'landscape')` on the `Pdf` instance. You can also pass `'A4'` and `'portrait'` for standard portrait reports. These per-request overrides take precedence over the `config/dompdf.php` defaults.
+</Tip>
+
+## How DomPDF Works in Corpen
+
+Every PDF generation method follows the same three-line pattern:
+
+```php
+use Barryvdh\DomPDF\Facade\Pdf;
+
+$pdf = Pdf::loadView('blade.view.path', $data)
+           ->setPaper('letter', 'landscape');
+
+return $pdf->download('filename.pdf');
+// — or —
+return $pdf->stream('filename.pdf'); // open in browser tab instead of downloading
+```
+
+`Pdf::loadView()` renders the Blade template with the supplied data array, converting the resulting HTML to a PDF byte stream. `->download()` sends a `Content-Disposition: attachment` response; `->stream()` sends `Content-Disposition: inline` so the browser displays the PDF in a new tab.
+
+For reports that must also be archived, the `->output()` method returns the raw PDF bytes for storage:
+
+```php
+// Indicators module: save to S3, then also send as download
+Storage::disk('s3')->put('corpentunida/indicators/' . $fileName, $pdf->output());
+return $pdf->download('informe_indicadores.pdf');
+```
+
+## PDF Endpoints
+
+| Route | HTTP | Controller method | Description |
+|---|---|---|---|
+| `GET /exequial/asociados/{id}/generarpdf/{active}` | GET | `ComaeExCliController::generarpdf` | Exequial client coverage sheet (portrait or landscape depending on `$active`) |
+| `GET /exequial/prestarServicio/generarpdf` | GET | `MaeC_ExSerController::generarpdf` | Full exequial monitoring report — all records, letter landscape |
+| `GET /exequial/prestarServicio/{id}/generarpdf` | GET | `MaeC_ExSerController::reporteIndividual` | Individual exequial service record, letter landscape |
+| `GET /movcontables/{id}/reportepdf/` | GET | `MoviContCincoController::generarpdf` | Five-percent accounting movements per associate, letter landscape |
+| `GET /condicionRetiros/{id}/reportepdf/` | GET | `CondicionesRetirosController::generarpdf` | Retirement liquidation sheet (currently renders as web view for review) |
+| `GET /comunicaciones-salida/{id}/descargar-pdf` | GET | `ComunicacionSalidaController::descargarPdf` | Outgoing correspondence letter with S3 signature image embedded as Base64 |
+| `POST /indicators/generar/informe` | POST | `IndicadoresController::descargarInforme` | Indicators dashboard report — saved to S3 and logged before download |
+| `POST /seguros/reclamacion/generarpdf` | POST | `SegReclamacionesController::generarpdf` | Insurance claim PDF |
+
+## Sample PDF Generation Methods
+
+The examples below are taken directly from the Corpen source.
+
+<CodeGroup>
+
+```php MaeC_ExSerController — full monitoring report
+use Barryvdh\DomPDF\Facade\Pdf;
+
+public function generarpdf()
+{
+    $registros = ExMonitoria::orderBy('id', 'desc')->get();
+
+    // Resolve parentesco labels before passing to view
+    $controllerparentesco = app()->make(ParentescosController::class);
+    foreach ($registros as $registro) {
+        $registro->parentesco = $controllerparentesco->showName($registro->parentesco);
+    }
+
+    $pdf = Pdf::loadView('exequial.prestarServicio.indexpdf', [
+        'registros'   => $registros,
+        'image_path'  => public_path('assets/images/CORPENTUNIDA_LOGO PRINCIPAL  (2).png'),
+    ])->setPaper('letter', 'landscape');
+
+    return $pdf->download(date('Y-m-d') . ' Reporte.pdf');
+}
+```
+
+```php MaeC_ExSerController — individual record
+public function reporteIndividual($id)
+{
+    $registro = ExMonitoria::find($id);
+    $controllerparentesco = app()->make(ParentescosController::class);
+    $registro->parentesco = $controllerparentesco->showName($registro->parentesco);
+
+    $pdf = Pdf::loadView('exequial.prestarServicio.indexpdf', [
+        'registros'  => collect([$registro]),
+        'image_path' => public_path('assets/img/corpentunida-logo-azul-oscuro-2021x300.png'),
+    ])->setPaper('letter', 'landscape');
+
+    return $pdf->download(date('Y-m-d') . ' ' . $registro->cedulaFallecido . ' Reporte.pdf');
+}
+```
+
+```php MoviContCincoController — accounting movements
+public function generarpdf($id)
+{
+    $movimientos = MoviContCinco::where('Cedula', $id)
+        ->with(['tercero', 'cuentaContable'])
+        ->orderBy('Cuenta', 'asc')
+        ->orderBy('Fecha', 'asc')
+        ->get();
+
+    $cuentasAgrupadas = MoviContCinco::select('cuenta')
+        ->with('cuentaContable')
+        ->where('Cedula', $id)
+        ->groupBy('cuenta')
+        ->orderBy('cuenta')
+        ->get();
+
+    $image_path = public_path('assets/images/CORPENTUNIDA_LOGO PRINCIPAL  (2).png');
+
+    $pdf = Pdf::loadView(
+        'cinco.movcontables.reportepdf',
+        compact('movimientos', 'cuentasAgrupadas', 'id', 'image_path')
+    )->setPaper('letter', 'landscape');
+
+    return $pdf->download(date('Y-m-d') . ' Reporte ' . $id . '.pdf');
+}
+```
+
+```php IndicadoresController — save to S3 then download
+public function descargarInforme()
+{
+    $indicators = $this->dataIndicadores();
+
+    $pdf = Pdf::loadView('indicators.informepdf', compact('indicators'))
+              ->setPaper('A4', 'portrait');
+
+    $fileName = 'InformeTIC_' . now()->format('Ymd_His') . '.pdf';
+
+    // Archive a copy on S3 and log the download
+    Storage::disk('s3')->put('corpentunida/indicators/' . $fileName, $pdf->output());
+    IndRegistroInformes::create([
+        'archivo'        => 'corpentunida/indicators/' . $fileName,
+        'usuario'        => auth()->id(),
+        'fecha_descarga' => now(),
+    ]);
+
+    return $pdf->download('informe_indicadores.pdf');
+}
+```
+
+```php ComunicacionSalidaController — correspondence with S3 signature
+public function descargarPdf($id)
+{
+    $comunicacion = ComunicacionSalida::with(['usuario', 'correspondencia.remitente'])
+        ->findOrFail($id);
+
+    // Load background image as Base64 (DomPDF cannot load relative paths)
+    $pathFondo   = resource_path('views/correspondencia/comunicaciones_salida/fondo_de_pdf.jpg');
+    $fondoBase64 = file_exists($pathFondo)
+        ? 'data:image/jpeg;base64,' . base64_encode(file_get_contents($pathFondo))
+        : null;
+
+    // Load signature from S3 as Base64
+    $firmaBase64 = null;
+    if ($comunicacion->ruta_pdf && Storage::disk('s3')->exists($comunicacion->ruta_pdf)) {
+        $fileContent = Storage::disk('s3')->get($comunicacion->ruta_pdf);
+        $ext         = pathinfo($comunicacion->ruta_pdf, PATHINFO_EXTENSION);
+        $firmaBase64 = 'data:image/' . $ext . ';base64,' . base64_encode($fileContent);
+    }
+
+    return view('correspondencia.comunicaciones_salida.preview_web', [
+        'comunicacionSalida' => $comunicacion,
+        'fondoImg'           => $fondoBase64,
+        'firmaImg'           => $firmaBase64,
+    ]);
+}
+```
+
+</CodeGroup>
+
+## Blade Views for PDFs
+
+PDF templates live in `resources/views/` using the same dot-notation as any other Blade view. The naming convention used across Corpen is to append `pdf` or `pdf.blade.php` to the view directory:
+
+| Blade view path | Module |
+|---|---|
+| `exequial/prestarServicio/indexpdf.blade.php` | Exequial monitoring |
+| `exequial/asociados/showpdf.blade.php` | Exequial client — portrait |
+| `exequial/asociados/showpdf2.blade.php` | Exequial client — landscape |
+| `cinco/movcontables/reportepdf.blade.php` | Five-percent accounting |
+| `cinco/retiros/liquidacionpdf.blade.php` | Retirement liquidation |
+| `correspondencia/comunicaciones_salida/pdf.blade.php` | Correspondence letter |
+| `correspondencia/correspondencias/historial_pdf.blade.php` | Correspondence history |
+| `correspondencia/tablero/pdf.blade.php` | Correspondence dashboard |
+| `cartera/morosospdf.blade.php` | Portfolio delinquency |
+| `indicators/informepdf.blade.php` | Indicators dashboard |
+| `interactions/reportes/pdf.blade.php` | Interaction audit |
+| `inventario/activos/pdf.blade.php` | Asset inventory |
+| `inventario/compras/pdf.blade.php` | Purchase invoice |
+| `inventario/movimientos/pdf.blade.php` | Inventory movement |
+| `flujo/auditoria/pdf.blade.php` | Workflow audit |
+| `flujo/workflows/pdf.blade.php` | Workflow report |
+| `seguros/reclamaciones/pdf.blade.php` | Insurance claims |
+| `reserva/dashboard/pdf.blade.php` | Reservation dashboard |
+
+<Note>
+DomPDF renders HTML/CSS to PDF without a browser rendering engine, so only a subset of CSS is supported. All PDF Blade views in Corpen use **inline CSS** (`style="..."`) or `<style>` blocks inside the document — external stylesheets loaded via `<link>` are not reliably applied. Background images and signature images must be passed as Base64-encoded data URIs (see the `descargarPdf` correspondence example above).
+</Note>
+
+## Custom Font: Corinthia
+
+The `config/dompdf.php` registers the Corinthia script font for signature rendering:
+
+```php
+'font_metrics' => [
+    'Corinthia' => [
+        'normal' => storage_path('fonts/Corinthia-Regular.ttf'),
+    ],
+],
+```
+
+Place `Corinthia-Regular.ttf` in `storage/fonts/` and the font will be available in any PDF Blade view via `font-family: Corinthia;`.
+
+## Generating PDFs from Artisan (Debugging)
+
+To verify a PDF template renders correctly without hitting an HTTP route, call the controller directly from Tinker:
+
+```bash
+php artisan tinker
+```
+
+```php
+$ctrl = app(\App\Http\Controllers\Exequial\MaeC_ExSerController::class);
+$response = $ctrl->generarpdf();
+file_put_contents('/tmp/test.pdf', $response->getContent());
+```
+
+Open `/tmp/test.pdf` locally to inspect layout before deploying.

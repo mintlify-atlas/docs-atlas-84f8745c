@@ -1,0 +1,192 @@
+---
+title: "Support Tickets Module: Issue Tracking and Resolution"
+sidebarTitle: "Support Tickets"
+description: "Create and manage support tickets with priorities, categories, types, SLA tracking, and internal observations in Corpen's Soportes module."
+---
+
+The Support Tickets module (Soportes) gives Corpen staff a structured workflow for reporting, routing, and resolving internal and member-facing issues. Tickets move through configurable states, can carry file attachments stored in S3, and trigger email notifications when escalated. An automatic closure rule shuts tickets that have been in the *En Revisión* state for more than five consecutive days.
+
+## Route Group
+
+All routes share the `/soportes` prefix and require the `auth` middleware.
+
+```php
+Route::middleware('auth')
+    ->prefix('soportes')
+    ->name('soportes.')
+    ->group(function () {
+        // ...
+    });
+```
+
+## Sub-resources
+
+<CardGroup cols={2}>
+  <Card title="Tickets" icon="ticket">
+    `Route::resource('soportes', ScpSoporteController::class)` — main ticket CRUD at `/soportes/soportes`. Parameters alias: `scpSoporte`.
+  </Card>
+  <Card title="States" icon="circle-dot">
+    `Route::resource('estados', ScpEstadoController::class)` — ticket lifecycle states (Sin Asignar, En Proceso, En Revisión, Cerrado).
+  </Card>
+  <Card title="Priorities" icon="arrow-up">
+    `Route::resource('prioridades', ScpPrioridadController::class)` — priority levels (Alta, Media, Baja) that control badge colour in the UI.
+  </Card>
+  <Card title="Types & Sub-types" icon="list-tree">
+    `Route::resource('tipos', ScpTipoController::class)` and `Route::resource('subtipos', ScpSubTipoController::class)` — two-level classification of issue nature.
+  </Card>
+  <Card title="Categories" icon="folder">
+    `Route::resource('categorias', ScpCategoriaController::class)` — top-level grouping; types are filtered by category via `GET /soportes/tipos/filtro/{categoria}`.
+  </Card>
+  <Card title="Observation Types" icon="message-lines">
+    `Route::resource('tipoObservaciones', ScpTipoObservacionController::class)` — classifies internal notes (e.g. Escalamiento triggers the email flow).
+  </Card>
+  <Card title="Observations" icon="comment">
+    `POST /soportes/soportes/{scpSoporte}/observaciones` — internal notes and state transitions. Owned by `ScpSoporteController@storeObservacion`.
+  </Card>
+  <Card title="Board Parameters" icon="sliders">
+    `GET /soportes/tablero` — `ScpTableroParametroController@index` renders a paginated admin panel covering all configuration entities.
+  </Card>
+</CardGroup>
+
+### Additional routes
+
+| Route | Controller method | Description |
+|---|---|---|
+| `GET /soportes/estadisticas` | `ScpEstadisticaController@index` | Ticket statistics dashboard |
+| `GET /soportes/estadisticas/data` | `ScpEstadisticaController@getDashboardData` | AJAX JSON for chart rendering |
+| `GET /soportes/notificaciones` | `ScpSoporteController@getNotificaciones` | Bell-icon count for the navbar |
+| `GET /soportes/notificaciones/detalladas` | `ScpSoporteController@getNotificacionesDetalladas` | Full breakdown by state |
+| `GET /soportes/mis-soportes` | `ScpSoporteController@misSoportes` | Tickets assigned to the authenticated user |
+| `GET /soportes/sin-asignar` | `ScpSoporteController@sinAsignar` | Unassigned ticket queue |
+| `GET /soportes/pendientes` | `ScpSoporteController@pendientes` | Pending ticket view |
+| `POST /soportes/{scpSoporte}/asignar` | `ScpSoporteController@asignarAgente` | Assign an agent to a ticket |
+| `POST /soportes/{scpSoporte}/cambiar-estado` | `ScpSoporteController@cambiarEstado` | Direct state change |
+| `GET /soportes/buscar-rapido` | `ScpSoporteController@quickSearch` | JS autocomplete search |
+| `GET /soportes/descargar/{id}` | `ScpSoporteController@descargarSoporte` | Download ticket attachment (S3 signed URL, 2 min) |
+| `GET /soportes/ver/{id}` | `ScpSoporteController@verSoporte` | View ticket attachment inline (S3 signed URL, 5 min) |
+| `GET /soportes/enviar-correo-escalado/{id}` | `ScpNotificacionController@enviarCorreoEscalado` | Manual escalation email re-send |
+| `GET /soportes/subtipos/filtro/{tipo}` | `ScpSoporteController@getSubTipos` | AJAX: sub-types for a given type |
+| `GET /soportes/tipos/filtro/{categoria}` | `ScpSoporteController@getTiposByCategoria` | AJAX: types for a given category |
+
+## Ticket Lifecycle
+
+<Steps>
+  <Step title="Create a ticket">
+    Navigate to `GET /soportes/soportes/create`. The form loads categories, types, priorities, and users from their respective catalogs. The controller pre-computes the next ticket ID for display.
+
+    Submit to `POST /soportes/soportes` with the following required fields:
+
+    ```php
+    // Validation rules from ScpSoporteController@store
+    'detalles_soporte'       => 'required|string',
+    'id_categoria'           => 'required|exists:scp_categorias,id',
+    'id_scp_tipo'            => 'required|exists:scp_tipos,id',
+    'id_scp_sub_tipo'        => 'required|exists:scp_sub_tipos,id',
+    'id_scp_prioridad'       => 'required|exists:scp_prioridads,id',
+    'id_users'               => 'required|exists:users,id',
+    // Optional
+    'id_gdo_cargo'           => 'nullable|integer|exists:gdo_cargo,id',
+    'id_cre_lineas_creditos'  => 'nullable|integer|exists:cre_lineas_creditos,id',
+    'soporte'                => 'nullable|file|mimes:pdf,jpeg,jpg,png|max:10240',
+    'usuario_escalado'       => 'nullable|string|max:100',
+    ```
+
+    A new ticket is created with `estado = 1` (Sin Asignar). File attachments are uploaded to S3 under `corpentunida/soportes/usuario_{id}/{year}/{month}/`.
+  </Step>
+
+  <Step title="Review and assign">
+    Open the ticket via `GET /soportes/soportes/{scpSoporte}` (`show` action). Managers can assign an agent using `POST /soportes/{scpSoporte}/asignar` or change state directly via `POST /soportes/{scpSoporte}/cambiar-estado`.
+
+    Dynamic AJAX selects cascade category → type → sub-type to keep the forms consistent:
+
+    ```http
+    GET /soportes/tipos/filtro/{categoriaId}
+    GET /soportes/subtipos/filtro/{tipoId}
+    ```
+  </Step>
+
+  <Step title="Add an observation">
+    Post an internal note at `POST /soportes/soportes/{scpSoporte}/observaciones`. Every observation simultaneously updates the ticket state:
+
+    ```php
+    // ScpSoporteController@storeObservacion validation
+    'observacion'               => 'required|string',
+    'id_scp_estados'            => 'required|exists:scp_estados,id',
+    'id_tipo_observacion'       => 'required|exists:scp_tipo_observacions,id',
+    'id_scp_usuario_asignado'   => 'nullable|integer|exists:scp_usuarios,id',
+    'calcification'             => 'nullable|integer|min:1|max:5',
+    ```
+
+    The `calcification` field accepts a 1–5 satisfaction score and is stored on the observation record.
+  </Step>
+
+  <Step title="Escalate">
+    Set `id_tipo_observacion` to the observation type named **Escalamiento** (type ID 3) and provide `id_scp_usuario_asignado`. The controller sends two emails via `SoporteEscaladoMail`:
+
+    - One to the escalated user's corporate email.
+    - One to the original ticket creator.
+
+    The `usuario_escalado` field on the ticket is updated to track who currently owns it.
+  </Step>
+
+  <Step title="Close the ticket">
+    Change the state to **Cerrado** (estado `4`) through a new observation. If the ticket remains in *En Revisión* (estado `3`) for five or more days, `ScpSoporteController@cerrarTicketAutomatico` will close it automatically and create a system observation:
+
+    ```
+    Cierre automático del soporte después de 5 días en estado "En Revisión".
+    ```
+
+    This method is called at the start of every `index()` request.
+  </Step>
+</Steps>
+
+## Board Parameters (Admin Panel)
+
+`GET /soportes/tablero` (requires `candirect:soporte.lista.administrador`) renders a single paginated administration view managed by `ScpTableroParametroController`:
+
+```php
+// ScpTableroParametroController@index
+$usuarios        = ScpUsuario::with('maeTercero')->paginate(5, ['*'], 'usuarios_page');
+$categorias      = ScpCategoria::paginate(5, ['*'], 'categorias_page');
+$tipos           = ScpTipo::paginate(5, ['*'], 'tipos_page');
+$subTipos        = ScpSubTipo::paginate(5, ['*'], 'subtipos_page');
+$estados         = ScpEstado::paginate(5, ['*'], 'estados_page');
+$prioridades     = ScpPrioridad::paginate(5, ['*'], 'prioridades_page');
+$tiposObservacion = ScpTipoObservacion::paginate(5, ['*'], 'observaciones_page');
+```
+
+Each section uses an independent pagination query parameter so the admin can page through users without resetting the type list.
+
+## Notification Bell
+
+The navbar notification bell calls `GET /soportes/notificaciones` which returns the count of open (non-closed) tickets for the authenticated user, including tickets escalated to them via the `scp_usuarios` table.
+
+For a detailed breakdown by state, `GET /soportes/notificaciones/detalladas` returns grouped JSON:
+
+```json
+{
+  "sinAsignar_count": 3,
+  "enProceso_count": 1,
+  "revision_count": 2,
+  "cerrados_count": 10,
+  "total": 6,
+  "sinAsignar": [...],
+  "enProceso": [...],
+  "revision": [...],
+  "cerrados": [...]
+}
+```
+
+<Note>
+  The `soportesEscalados` relationship on the `User` model ties a user to all tickets where `scp_soportes.usuario_escalado` matches their `ScpUsuario` record:
+
+  ```php
+  // User.php
+  public function soportesEscalados()
+  {
+      return $this->hasMany(ScpSoporte::class, 'usuario_escalado', 'id');
+  }
+  ```
+
+  Note that `usuario_escalado` stores the `scp_usuarios.id` (not `users.id`), so queries involving escalation always join through `scp_usuarios` first.
+</Note>

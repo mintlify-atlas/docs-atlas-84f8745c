@@ -1,0 +1,103 @@
+---
+title: "Treasury Module: Payment Management and Cash Flow"
+sidebarTitle: "Treasury"
+description: "Track outgoing payments and manage treasury operations in Corpen's Tesoreria module, integrated with the accounting and portfolio systems."
+---
+
+The Treasury module manages the outgoing side of Corpen's cash flow: the disbursements made when a credit is approved and the funds are released to the member. Each treasury payment (`tes_pagos`) is tied to a specific credit record in `cre_creditos`, creating a complete audit trail from loan origination to physical fund transfer. The module is implemented by `App\Http\Controllers\Tesoreria\PagoController` and uses the `App\Models\Tesoreria\Pago` model backed by the `tes_pagos` table.
+
+---
+
+## Route reference
+
+The Treasury `PagoController` is a standard Laravel resource controller. Routes follow the default resource conventions:
+
+| Method | URL (convention) | Route name | Handler | Description |
+|---|---|---|---|---|
+| `GET` | `/pagos` | `pagos.index` | `PagoController@index` | List all payments (paginated, 15/page) |
+| `GET` | `/pagos/create` | `pagos.create` | `PagoController@create` | New payment form |
+| `POST` | `/pagos` | `pagos.store` | `PagoController@store` | Persist payment |
+| `GET` | `/pagos/{pago}` | `pagos.show` | `PagoController@show` | Payment detail |
+| `GET` | `/pagos/{pago}/edit` | `pagos.edit` | `PagoController@edit` | Edit form |
+| `PUT` | `/pagos/{pago}` | `pagos.update` | `PagoController@update` | Update payment |
+| `DELETE` | `/pagos/{pago}` | `pagos.destroy` | `PagoController@destroy` | Delete payment |
+
+All routes require authentication. The controller uses Route Model Binding on the `Pago` model.
+
+---
+
+## `tes_pagos` schema
+
+The `tes_pagos` table captures every treasury disbursement:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint (PK) | Auto-increment |
+| `valor_pagado` | decimal (15,2) | Amount disbursed |
+| `cre_creditos_id` | FK → `cre_creditos` (restrict) | Parent credit record |
+| `created_at` | timestamp | Automatically set on insert |
+| `updated_at` | timestamp | Automatically updated on change |
+
+The foreign key uses `onDelete('restrict')` — a credit cannot be deleted while treasury payment records exist against it.
+
+---
+
+## Listing and recording payments
+
+The `index` action retrieves all treasury payments with the parent credit eager-loaded:
+
+```php
+$pagos = Pago::with('credito')->latest()->paginate(15);
+```
+
+This ensures that each payment row in the list view can display the credit's `pr` number, `valor`, `fecha_desembolso`, and state without additional queries.
+
+### Creating a new payment
+
+Navigate to `GET /pagos/create`. The form loads all credits from `cre_creditos` into a dropdown. Select the credit being disbursed, enter the `valor_pagado`, and submit.
+
+Validation is handled by the `StorePagoRequest` Form Request. On success the controller redirects to `pagos.index` with the flash message: *"Pago registrado exitosamente."*
+
+The `show` action loads the full credit relationship before rendering:
+
+```php
+$pago->load('credito');
+```
+
+---
+
+## Integration with other modules
+
+<Tip>
+  After recording a treasury disbursement, reconcile the outgoing payment with the corresponding debit in the bank statement. Navigate to `GET /contabilidad/extractos/conciliacion` and use the **Global Tracking** switch to locate the debit transaction for the disbursement date and amount. Linking the bank transaction to the credit's associated payment voucher closes the financial loop across Treasury, Accounting, and Portfolio.
+</Tip>
+
+### Accounting integration
+
+Treasury payments represent outgoing cash flows. Operators should ensure that:
+
+1. The disbursement appears as a debit in the corresponding bank statement (`con_extractos_transacciones`).
+2. The bank transaction is reconciled in the Accounting module's conciliation view once the bank confirms the transfer.
+3. The bank account used for disbursement (`con_cuentas_bancarias`) has `estado = 'Activa'` so it appears in the reconciliation dropdowns.
+
+### Credits integration
+
+Each `tes_pagos` row references `cre_creditos_id` with a `restrict` constraint, making treasury the final confirmation that a credit has been funded. The credit status should be advanced to the appropriate state (e.g. "Activo" / "Desembolsado") after the treasury payment is registered.
+
+### Collections integration
+
+Once a credit is disbursed and the member begins making repayments, those incoming payments are captured in the Collections module (`rec_pagos`) rather than in Treasury. Treasury is exclusively outgoing; Collections is exclusively incoming.
+
+---
+
+## Error handling and flash messages
+
+All state-changing operations return a redirect with a session flash:
+
+| Operation | Flash key | Message |
+|---|---|---|
+| Store | `success` | `Pago registrado exitosamente.` |
+| Update | `success` | `Pago actualizado exitosamente.` |
+| Destroy | `success` | `Pago eliminado exitosamente.` |
+
+These messages are rendered by the shared flash alert component in the base layout.

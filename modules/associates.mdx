@@ -1,0 +1,195 @@
+---
+title: "Associates Module: Member Record Management in Corpen"
+sidebarTitle: "Associates"
+description: "Manage cooperative member (associate) records, bulk Excel synchronization, document archiving, and ECM integration using the Corpen Associates module."
+---
+
+The Associates module is the master registry for all cooperative members — referred to as pastors or associates — within Corpen. It maintains each member's personal, ministerial, and document-archive record in the `mae_asociados` table, and provides a complete lifecycle from initial enrollment to ECM (Electronic Content Management) archiving. All routes are protected by the `auth` middleware and prefixed under `/asociados`.
+
+## Routes Overview
+
+| Method | Path | Name | Description |
+|--------|------|------|-------------|
+| `GET` | `/asociados/tablero` | `asociados.dashboard` | Dashboard with KPI cards and charts |
+| `GET` | `/asociados/maestro` | `asociados.maestro.index` | Paginated associate list with search and filters |
+| `GET` | `/asociados/maestro/create` | `asociados.maestro.create` | New associate form |
+| `POST` | `/asociados/maestro` | `asociados.maestro.store` | Save new associate record |
+| `GET` | `/asociados/maestro/{id}` | `asociados.maestro.show` | View associate details |
+| `GET` | `/asociados/maestro/{id}/edit` | `asociados.maestro.edit` | Edit associate form |
+| `PUT/PATCH` | `/asociados/maestro/{id}` | `asociados.maestro.update` | Update associate record |
+| `DELETE` | `/asociados/maestro/{id}` | `asociados.maestro.destroy` | Delete associate record |
+| `GET` | `/asociados/sincronizar` | `asociados.sincronizar.index` | Excel synchronization panel |
+| `GET` | `/asociados/descargar-excel` | `asociados.sincronizar.descargar` | Download full database as `.xlsx` |
+| `POST` | `/asociados/subir-excel` | `asociados.sincronizar.subir` | Upload and preview Excel (Step 1) |
+| `POST` | `/asociados/confirmar-sincronizacion` | `asociados.sincronizar.confirmar` | Commit bulk upsert (Step 2) |
+| `GET` | `/asociados/buscar-cedula/{cedula}` | `asociados.buscar-cedula` | AJAX lookup by cédula in `mae_asociados` |
+| `GET` | `/asociados/buscar-tercero/{cedula}` | `asociados.buscar-tercero` | AJAX lookup by cédula in `MaeTerceros` |
+| `GET` | `/asociados/ecm` | `asociados.ecm.index` | ECM document archive view |
+
+## Dashboard
+
+The dashboard at `GET /asociados/tablero` renders key performance indicators derived directly from the `mae_asociados` table:
+
+- **Total expedientes** — full count of all associate records
+- **Expedientes activos** — records where `estado = 'Activo'`
+- **Expedientes inactivos** — records where `estado = 'Inactivo'`
+- **Digitalizados ECM** — records where `cargado_ecm = true`
+- **Pendientes de archivo** — records where `radicado` is `null` or empty
+
+The five most recently created associates (with their `ciudad` and `distrito` relationships) are displayed in the **Últimos Ingresos** panel. Charts break down members by `estado_pastor` and `estado_civil`.
+
+## Associate Record Fields
+
+Each record in `mae_asociados` captures the following groups of data:
+
+<Tabs>
+  <Tab title="Identity">
+    | Field | Type | Notes |
+    |-------|------|-------|
+    | `cedula` | `string(15)` | Unique national ID (primary lookup key) |
+    | `nombre1` | `string(100)` | First name (required) |
+    | `nombre2` | `string(100)` | Second name (optional) |
+    | `apellido1` | `string(100)` | First surname (required) |
+    | `apellido2` | `string(100)` | Second surname (optional) |
+    | `fecha_nacimiento` | `date` | Date of birth |
+    | `lugar_expedicion_cedula` | `string(50)` | Municipality of ID issuance |
+    | `fecha_expedicion` | `date` | Date the national ID was issued |
+    | `estado_civil` | `string(20)` | Marital status (e.g., `Casado`, `Soltero`) |
+  </Tab>
+  <Tab title="Contact">
+    | Field | Type | Notes |
+    |-------|------|-------|
+    | `correo_pastor` | `string(100)` | Primary email address |
+    | `celular_pastor` | `string(15)` | Mobile phone number |
+    | `whatsapp` | `string(15)` | WhatsApp number |
+  </Tab>
+  <Tab title="Ministry">
+    | Field | Type | Notes |
+    |-------|------|-------|
+    | `fecha_afiliacion` | `date` | Formal affiliation date |
+    | `distrito_actual` | `string(50)` | District code (FK → `MaeDistritos.COD_DIST`) |
+    | `ciudad_distrito` | `string(50)` | City of the district (FK → `geo_ciudades.id_ciudad`) |
+    | `direccion_distrito` | `string(100)` | Physical address of congregation |
+    | `estado_pastor` | `string(20)` | Operational state (`Activo`, `Licencia`, `Retirado`, `Suspendido`) |
+    | `especificacion` | `string(50)` | Ministerial specialty or role |
+    | `licencia` | `string(30)` | Pastoral licence type |
+    | `pais` | `string(30)` | Country of service |
+    | `iglesia_actual` | `string(100)` | Current congregation name |
+  </Tab>
+  <Tab title="Documents">
+    | Field | Type | Notes |
+    |-------|------|-------|
+    | `doc_formulario_afiliacion` | `string(20)` | Affiliation form status (`Entregado`, `Pendiente`, `No Aplica`) |
+    | `doc_autorizacion_datos` | `string(20)` | Habeas Data authorization status |
+    | `doc_cedula_pastor` | `string(20)` | Pastor's ID copy status |
+    | `doc_cedula_esposa` | `string(20)` | Spouse's ID copy status |
+    | `doc_licencia_pastoral` | `string(20)` | Pastoral licence copy status |
+    | `doc_registro_matrimonio` | `string(20)` | Marriage certificate copy status |
+    | `doc_id_hijos` | `string(20)` | Children's ID copies status |
+    | `radicado` | `string(20)` | Physical file reference number |
+    | `ubicacion_carpeta` | `string(30)` | Physical shelf/folder identifier |
+    | `numero_caja` | `string(20)` | Archive box number |
+    | `cantidad_folios` | `integer` | Total page count in physical folder |
+  </Tab>
+  <Tab title="ECM">
+    | Field | Type | Notes |
+    |-------|------|-------|
+    | `escaneado` | `boolean` | Physical document has been digitised |
+    | `cargado_ecm` | `boolean` | Digital files uploaded to document manager |
+    | `ubicacion_ecm_link` | `string(255)` | Direct URL to the electronic record |
+    | `validado_archivo` | `boolean` | Record reviewed and approved by audit |
+  </Tab>
+</Tabs>
+
+## Creating and Editing Associates
+
+The `store` and `update` actions apply the same 44-field validation ruleset from `getValidationRules()`. Key constraints:
+
+- `cedula` must be unique in `mae_asociados` (unique constraint is relaxed for the record's own `id` on update).
+- `distrito_actual` must exist in `MaeDistritos.COD_DIST`.
+- `ciudad_distrito` must exist in `geo_ciudades.id_ciudad`.
+- Boolean flags (`escaneado`, `cargado_ecm`, `validado_archivo`) are cast from the submitted form value using `$request->boolean()`.
+
+The optional checkbox `sincronizar_tercero` controls whether saving the associate record also synchronises the corresponding entry in `MaeTerceros`. When unchecked, the model property `skipTerceroSync` is set to `true` before calling `save()`.
+
+```php
+// Example: creating an associate from a validated request
+$asociado = new MaeAsociado($validated);
+
+if (!$request->boolean('sincronizar_tercero')) {
+    $asociado->skipTerceroSync = true;
+}
+
+$asociado->save();
+```
+
+<Note>
+The `buscar-cedula/{cedula}` and `buscar-tercero/{cedula}` AJAX endpoints are used to auto-fill the create/edit forms. When a user types a cédula, the frontend calls `GET /asociados/buscar-cedula/{cedula}` to check for an existing associate record, and `GET /asociados/buscar-tercero/{cedula}` to pre-populate fields from the master `MaeTerceros` directory. Both endpoints return JSON with a `status` field of `success` or `error`.
+</Note>
+
+## Excel Bulk Synchronisation
+
+The synchronisation panel (`GET /asociados/sincronizar`) enables administrators to upload a master `.xlsx` file and perform a high-volume upsert against the `mae_asociados` table without overloading PHP memory or hitting MySQL timeout limits.
+
+<Steps>
+  <Step title="Navigate to the synchronisation panel">
+    Open `GET /asociados/sincronizar` (`asociados.sincronizar.index`). The page offers two actions:
+    - **Download current database** — `GET /asociados/descargar-excel` generates a timestamped file named `maestro_asociados_YYYY_MM_DD_His.xlsx` using `AsociadosExport`.
+    - **Upload a new file** — use the file picker to select your `.xlsx` or `.xls` file (max 50 MB).
+  </Step>
+  <Step title="Upload and validate the Excel file">
+    Submit the form to `POST /asociados/subir-excel`. The controller:
+
+    1. Validates the file with `mimes:xlsx,xls,csv|max:51200`.
+    2. Reads all rows via `AsociadosImport`.
+    3. Extracts every `cedula` column, runs a **single bulk query** against `mae_asociados` to identify existing records, and builds an in-memory diff.
+    4. Cleans each `cedula` value to digits only (`preg_replace('/[^0-9]/', '', ...)`).
+    5. Detects duplicate cédulas within the uploaded file itself.
+    6. Labels each row as `CREATE` or `UPDATE`.
+    7. Caches the processed rows under key `import_asociados_{user_id}` for 2 hours.
+    8. Returns a preview view (`asociados.excel-preview`) showing counters for new records, updates, and any row-level warnings.
+  </Step>
+  <Step title="Confirm the import">
+    Review the preview table, optionally correct individual cells inline, then submit to `POST /asociados/confirmar-sincronizacion`. The controller:
+
+    1. Sets `set_time_limit(0)` and disables the query log to prevent timeouts.
+    2. Applies any manual corrections from the form.
+    3. Processes records in **chunks of 100**, calling `DB::reconnect()` and wrapping each chunk in its own `DB::beginTransaction()` / `DB::commit()` to avoid MySQL error 2006.
+    4. Uses `firstOrNew(['cedula' => ...])` for upsert semantics.
+    5. On success, clears the cache key and redirects to `asociados.maestro.index` with a success flash message.
+    6. On failure, rolls back the current chunk and redirects to the sync panel with the exact SQL error.
+  </Step>
+</Steps>
+
+## ECM Document Archive
+
+The ECM view at `GET /asociados/ecm` (`asociados.ecm.index`) provides a filtered interface over the same `mae_asociados` table, focused on document management state. The header shows three aggregate counters:
+
+- **Digitalizados ECM** — count where `cargado_ecm = true`
+- **Pendientes de archivo** — count where `radicado IS NULL OR radicado = ''`
+- **Validados** — count where `validado_archivo = true`
+
+The table supports three independent filters applied via query string:
+
+| Parameter | Behaviour |
+|-----------|-----------|
+| `radicado` | Exact match on the `radicado` field |
+| `search` | `LIKE` search across `cedula`, `nombre1`, and `apellido1` |
+| `estado_digitalizacion` | `1` for digitised, `0` for not digitised (`cargado_ecm` column) |
+
+Results are paginated to 15 records per page with `withQueryString()` so active filters survive page navigation.
+
+<CardGroup cols={2}>
+  <Card title="Maestro de Asociados" icon="users">
+    Full CRUD at `/asociados/maestro` — manage every field of a member's personal, ministerial, and document record.
+  </Card>
+  <Card title="Excel Sync" icon="file-excel">
+    Bulk import or export the entire associate database via `/asociados/sincronizar` using transactional chunked processing.
+  </Card>
+  <Card title="AJAX Lookup" icon="magnifying-glass">
+    Auto-fill forms at `/asociados/buscar-cedula/{cedula}` and `/asociados/buscar-tercero/{cedula}` to prevent duplicate entries.
+  </Card>
+  <Card title="ECM Archive" icon="folder-open">
+    Track document digitisation progress and find physical file locations at `/asociados/ecm`.
+  </Card>
+</CardGroup>

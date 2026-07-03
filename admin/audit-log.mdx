@@ -1,0 +1,139 @@
+---
+title: "Audit Log: System Activity Tracking in Corpen"
+sidebarTitle: "Audit Log"
+description: "View and filter system activity records in Corpen's audit log, which captures user actions across all modules for compliance and troubleshooting."
+---
+
+Corpen automatically records every meaningful user action in a central audit log stored in the `Auditoria` table. Each time a controller performs a create, update, or delete operation it calls `AuditoriaController@create`, which writes a timestamped entry that identifies the acting user, the action description, and the module (area) where it occurred. Administrators can review this log in full at `/admin` to support compliance requirements and troubleshoot unexpected changes.
+
+## Route
+
+The audit log is exposed as a resource controller registered at the root `admin` path:
+
+```php
+Route::resource('admin', AuditoriaController::class)
+    ->names('admin.auditoria')
+    ->middleware(['auth', 'candirect:admin.auditoria.index']);
+```
+
+| Method | URI | Controller Action | Route Name |
+|--------|-----|-------------------|------------|
+| GET | `/admin` | `AuditoriaController@index` | `admin.auditoria.index` |
+
+The route is protected by both the `auth` middleware and the `candirect:admin.auditoria.index` gate, so only users with the `admin.auditoria.index` permission can access it.
+
+---
+
+## Database Table: `Auditoria`
+
+The audit log is persisted in the `Auditoria` table (note the capital A — this is the value set on the `$table` property of the `auditoria` model). The table has no Laravel `timestamps` columns; all time data is stored in the dedicated fields below.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `bigint` (auto-increment) | Primary key |
+| `fechaRegistro` | `date` | Calendar date when the action was recorded |
+| `horaRegistro` | `time` | Clock time when the action was recorded |
+| `usuario` | `string` | Display name of the authenticated user (`Auth::user()->name`) |
+| `usuario_id` | `string` | ID of the authenticated user (`Auth::user()->id`) |
+| `accion` | `string` | Free-text description of what was done (e.g., `"add usuario app maria.lopez"`) |
+| `area` | `string` | Module or area of the application where the action originated (e.g., `"ADMINISTRACIÓN"`, `"CREDITOS"`) |
+
+---
+
+## How Audit Entries Are Created
+
+Every controller that needs to record an audit event instantiates `AuditoriaController` via the service container and calls its `create` method:
+
+```php
+private function auditoria($accion)
+{
+    $auditoriaController = app(AuditoriaController::class);
+    $auditoriaController->create($accion, "ADMINISTRACIÓN");
+}
+```
+
+The `create` method itself uses `Carbon::now()` to capture the current date and time, and reads the user identity from `Auth::user()`:
+
+```php
+public function create($action, $area)
+{
+    $now = Carbon::now();
+
+    auditoria::create([
+        'fechaRegistro' => $now->toDateString(),
+        'horaRegistro'  => $now->toTimeString(),
+        'usuario'       => Auth::user()->name,
+        'usuario_id'    => Auth::user()->id,
+        'accion'        => $action,
+        'area'          => $area,
+    ]);
+}
+```
+
+This pattern is used consistently across admin, credits, portfolio, and other modules — the `area` argument differentiates which part of the system originated the entry.
+
+---
+
+## Viewing the Audit Log
+
+Navigate to `/admin` when logged in with the `admin.auditoria.index` permission. The `index` action retrieves all records sorted newest-first:
+
+```php
+public function index()
+{
+    $registros = auditoria::orderBy('id', 'desc')->get();
+    return view('admin.users.usuarios', compact('registros'));
+}
+```
+
+The view (`admin.users.usuarios`) renders the full list of audit records in reverse chronological order, giving administrators an immediate view of the most recent system activity.
+
+---
+
+## Filtering and Searching Audit Records
+
+The base `index` query returns all records. To narrow results for a specific compliance review, you can query the `Auditoria` table directly:
+
+<Tabs>
+  <Tab title="Filter by User">
+    ```php
+    // Count actions by a specific user
+    $count = auditoria::where('usuario', $user->name)->count();
+
+    // Get the most recent action for a user
+    $last = auditoria::where('usuario', $user->name)
+        ->orderBy('fechaRegistro', 'desc')
+        ->first();
+    ```
+  </Tab>
+  <Tab title="Filter by Area">
+    ```php
+    // All actions from the CREDITOS module
+    $registros = auditoria::where('area', 'CREDITOS')
+        ->orderBy('id', 'desc')
+        ->get();
+    ```
+  </Tab>
+  <Tab title="Filter by Date Range">
+    ```php
+    use Carbon\Carbon;
+
+    $registros = auditoria::whereBetween('fechaRegistro', [
+        Carbon::parse('2025-01-01')->toDateString(),
+        Carbon::parse('2025-01-31')->toDateString(),
+    ])->orderBy('horaRegistro', 'desc')->get();
+    ```
+  </Tab>
+</Tabs>
+
+The user edit view at `/users/{user}/edit` already shows a summary count and the date of the last recorded action for each user, pulled with the same `where('usuario', $user->name)` pattern.
+
+---
+
+<Note>
+  The `AuditoriaController` at `App\Http\Controllers\AuditoriaController` is the **system-wide** audit log and is separate from `AuditoriaProyectosController` (`App\Http\Controllers\Flujo\AuditoriaProyectosController`). The latter is scoped exclusively to the Flujo/workflows module and records project-level task activity — it exposes its own `/auditoria` route nested inside the Flujo route group and supports PDF export. Do not confuse the two when reviewing records or configuring permissions.
+</Note>
+
+<Tip>
+  For compliance reporting, filter the `Auditoria` table by `area` to isolate a specific module's activity, then export the result set to Excel using a library such as `maatwebsite/excel`. Pair the `fechaRegistro` and `horaRegistro` columns to reconstruct a precise chronological timeline. Because `usuario_id` is stored alongside the display name, you can join back to the `users` table even if a user's name has been changed since the event was recorded.
+</Tip>

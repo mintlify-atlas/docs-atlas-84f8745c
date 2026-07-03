@@ -1,0 +1,267 @@
+---
+title: "Installing Corpen on Your Server or Local Machine"
+sidebarTitle: "Installation"
+description: "Full installation guide for Corpen: system requirements, dependency setup, database migration, and first-run configuration for production and local environments."
+---
+
+Corpen is a Laravel 11 + Livewire 3 enterprise management platform built for cooperative organizations in Colombia. This guide walks you through installing Corpen from scratch — whether you are setting up a production server, a staging environment, or a local development machine.
+
+## System Requirements
+
+Before you begin, confirm your environment meets the following minimums:
+
+<CardGroup cols={2}>
+  <Card title="PHP 8.2+" icon="php">
+    Required extensions: `pdo_mysql`, `gd`, `zip`, `bcmath`, `openssl`. The Docker image uses `php:8.4-apache` with all extensions pre-installed.
+  </Card>
+  <Card title="Composer 2" icon="box">
+    Corpen's dependency tree includes Laravel 11, Livewire 3, Spatie Permission, Maatwebsite Excel, and Google Cloud Storage SDK.
+  </Card>
+  <Card title="Node.js 18+" icon="node">
+    Required to compile front-end assets with Vite. The Dockerfile pins Node 18 via `nvm`.
+  </Card>
+  <Card title="MySQL 8 / MariaDB 10.6+" icon="database">
+    Corpen uses over 60 migration files covering insurance, credits, archive management, reservations, and more.
+  </Card>
+</CardGroup>
+
+<Note>
+  Redis is **optional** but recommended for production cache and session drivers. The default `CACHE_STORE` and `SESSION_DRIVER` are both `database`, so Corpen works out of the box without Redis.
+</Note>
+
+---
+
+## Installation
+
+<Tabs>
+  <Tab title="Production">
+
+<Steps>
+
+### Clone the repository
+
+```bash
+git clone https://github.com/corpentunida-org/corpen.git
+cd corpen
+```
+
+### Copy the environment file and generate the application key
+
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+Edit `.env` with your database credentials and application URL before continuing. See [Environment Configuration](/environment-configuration) for all variables.
+
+### Install PHP dependencies (optimized for production)
+
+```bash
+composer install --no-dev --optimize-autoloader
+```
+
+The `--no-dev` flag excludes packages like `laravel/sail`, `laravel/pint`, and `phpunit/phpunit` that are not needed in production.
+
+### Install and build front-end assets
+
+```bash
+npm install
+npm run build
+```
+
+This compiles and fingerprints all Vite/Tailwind assets into `public/build/`.
+
+### Run database migrations
+
+```bash
+php artisan migrate
+```
+
+Corpen ships 60+ migration files that create all domain tables — insurance policies (`seg_polizas`), credits (`cre_creditos`), archive management (`gdo_empleados`), reservations (`res_reservas`), workflows, and more.
+
+### Create the public storage symlink
+
+```bash
+php artisan storage:link
+```
+
+This links `public/storage` → `storage/app/public`, which is required for uploaded documents and profile photos to be publicly accessible.
+
+### Seed the default roles (optional but recommended)
+
+```bash
+php artisan db:seed --class=RoleSeeder
+```
+
+This creates the five default roles: `admin`, `exequial`, `creditos`, `seguros`, and `read`.
+
+### Cache configuration for production
+
+```bash
+php artisan optimize
+php artisan view:cache
+```
+
+</Steps>
+
+<Warning>
+  Always run `php artisan optimize` after changing any `.env` values or editing config files in production. Stale config cache is the most common source of unexpected behavior after deployments.
+</Warning>
+
+  </Tab>
+  <Tab title="Development">
+
+<Steps>
+
+### Clone the repository
+
+```bash
+git clone https://github.com/corpentunida-org/corpen.git
+cd corpen
+```
+
+### Copy the environment file and generate the application key
+
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+Set `APP_ENV=local` and `APP_DEBUG=true` in your `.env`.
+
+### Install PHP dependencies (including dev tools)
+
+```bash
+composer install
+```
+
+This includes `laravel/sail`, `laravel/pint`, `barryvdh/laravel-ide-helper`, and `spatie/laravel-ignition`.
+
+### Install front-end dependencies and start the dev server
+
+```bash
+npm install
+npm run dev
+```
+
+Vite will start a hot-reload dev server at `http://localhost:5173`.
+
+### Run database migrations
+
+```bash
+php artisan migrate
+```
+
+### Create the public storage symlink
+
+```bash
+php artisan storage:link
+```
+
+### Seed the default roles
+
+```bash
+php artisan db:seed --class=RoleSeeder
+```
+
+</Steps>
+
+<Tip>
+  Corpen ships with `laravel/sail` as a dev dependency. If you prefer Docker-managed PHP/MySQL without configuring Apache yourself, run `./vendor/bin/sail up` after copying `.env`. You will still need to set `DB_HOST=mysql` to match the Sail service name.
+</Tip>
+
+  </Tab>
+  <Tab title="Docker Compose">
+
+Corpen includes a `docker-compose.yml` with a single `app` service that builds from the project `Dockerfile`.
+
+```yaml
+services:
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        ports:
+            - 83:80
+        env_file:
+            - .env
+        volumes:
+            - ".:/var/www/html"
+            - ./public/assets/img:/var/www/html/public/assets/img
+```
+
+The service exposes the app on **port 83** and mounts the full project directory for live editing. The `public/assets/img` volume is mounted separately to persist uploaded images outside the container layer.
+
+<Steps>
+
+### Prepare the environment file
+
+```bash
+cp .env.example .env
+# Edit .env with your DB credentials, APP_KEY, APP_URL, etc.
+```
+
+### Build and start the container
+
+```bash
+docker compose up -d --build
+```
+
+### Run first-time setup inside the container
+
+```bash
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan migrate
+docker compose exec app php artisan storage:link
+docker compose exec app php artisan db:seed --class=RoleSeeder
+```
+
+</Steps>
+
+The `Dockerfile` installs PHP 8.4 with Apache, Composer, Node 18 (via nvm), and all required PHP extensions (`pdo_mysql`, `gd`, `zip`, `bcmath`). It also sets PHP upload limits to **500 MB** and `max_execution_time` to **600 seconds** — values tuned for large Excel import and PDF generation workloads.
+
+  </Tab>
+</Tabs>
+
+---
+
+## Queue Worker
+
+Corpen uses Laravel queues for background jobs including Excel exports (`maatwebsite/excel`) and PDF generation (`barryvdh/laravel-dompdf`). The default `QUEUE_CONNECTION` is `database`, which uses the `jobs` table created by the `0001_01_01_000002_create_jobs_table.php` migration.
+
+Start a persistent queue worker with:
+
+```bash
+php artisan queue:work --tries=3
+```
+
+For production, use a process supervisor such as **Supervisor** or **systemd** to keep the worker running across restarts:
+
+```ini
+[program:corpen-worker]
+command=php /var/www/html/artisan queue:work --tries=3
+autostart=true
+autorestart=true
+user=www-data
+redirect_stderr=true
+stdout_logfile=/var/log/corpen-worker.log
+```
+
+<Note>
+  If `QUEUE_CONNECTION=sync`, all jobs run synchronously in the request cycle. This is convenient for local development but will cause timeouts on large Excel exports in production.
+</Note>
+
+---
+
+## Post-Installation Checklist
+
+| Step | Command | Required |
+|------|---------|----------|
+| Generate app key | `php artisan key:generate` | ✅ Always |
+| Run migrations | `php artisan migrate` | ✅ Always |
+| Create storage link | `php artisan storage:link` | ✅ Always |
+| Seed roles | `php artisan db:seed --class=RoleSeeder` | Recommended |
+| Build assets | `npm run build` | ✅ Production |
+| Cache config | `php artisan optimize` | ✅ Production |
+| Cache views | `php artisan view:cache` | ✅ Production |
+| Start queue worker | `php artisan queue:work` | ✅ Production |

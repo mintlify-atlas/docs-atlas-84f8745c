@@ -1,0 +1,250 @@
+---
+title: "Interactions Module: CRM Conversations and Follow-ups"
+sidebarTitle: "Interactions"
+description: "Log CRM interactions, manage multi-channel conversations, assign follow-ups, and track outcomes in Corpen's Interacciones module."
+---
+
+The Interactions module is Corpen's built-in CRM system for managing every touchpoint with cooperative members and clients. Agents log calls, emails, WhatsApp exchanges, and other contacts; set outcomes; schedule follow-ups; and track whether those follow-ups are completed on time. A rich reporting dashboard with PDF export and a team chat system are included in the same route group.
+
+## Route Group
+
+All routes in this module share the `/interactions` prefix and require the `auth` middleware. Named routes use the `interactions.` prefix (e.g. `interactions.index`).
+
+```php
+Route::prefix('interactions')
+    ->middleware(['auth'])
+    ->name('interactions.')
+    ->group(function () {
+        // ... all sub-routes
+    });
+```
+
+## Sub-resources
+
+| Sub-resource | Route prefix | Controller | Purpose |
+|---|---|---|---|
+| Interaction records | `/interactions` | `InteractionController` | Main CRUD — one record per agent–client contact |
+| Communication channels | `/interactions/channels` | `IntChannelController` | Phone, email, WhatsApp, etc. |
+| Interaction types | `/interactions/types` | `IntTypeController` | Categorize the reason for contact |
+| Outcomes / results | `/interactions/outcomes` | `IntOutcomeController` | Result catalog; `estado=1` marks success |
+| Next actions | `/interactions/next_actions` | `IntNextActionController` | Catalog of scheduled follow-up actions |
+| Follow-ups | `/interactions/seguimientos` | `IntSeguimientoController` | Time-stamped follow-up records linked to an interaction |
+| Workspaces | `/interactions/workspaces` | `IntWorkspaceController` | Team groupings tied to a `gdo_area` |
+| Conversations | `/interactions/conversations` | `IntConversationController` | Chat threads (general, contextual, or private) |
+| Chat interface | `/interactions/chat` | `IntChatController` | Three-column chat UI listing workspaces → conversations → messages |
+
+### Reports
+
+| Route | Method | Description |
+|---|---|---|
+| `GET /interactions/report` | `InteractionController@report` | Interactive HTML dashboard with KPI cards and charts |
+| `GET /interactions/report/pdf` | `InteractionController@reportPdf` | PDF audit report generated via `barryvdh/laravel-dompdf` |
+
+### AJAX helpers
+
+| Route | Controller method | Purpose |
+|---|---|---|
+| `GET /interactions/search-clients?q=` | `searchClients` | Select2 client autocomplete (paginates 50 results) |
+| `GET /interactions/search-users?q=` | `searchUsers` | Select2 agent autocomplete |
+| `GET /interactions/cliente/{cod_ter}` | `getCliente` | Full client profile + last 10 interactions |
+| `GET /interactions/{interaction}/seguimientos` | `getSeguimientos` | Fetch follow-up timeline for a modal |
+
+## Key Models and Relationships
+
+### `Interaction` (table: `interactions`)
+
+```php
+protected $fillable = [
+    'client_id', 'agent_id', 'interaction_date',
+    'interaction_channel', 'interaction_type',
+    'duration', 'outcome', 'notes',
+    'parent_interaction_id', 'id_linea_de_obligacion',
+    'id_user_asignacion',
+    'cedula_quien_llama', 'nombre_quien_llama',
+    'celular_quien_llama', 'parentesco_quien_llama',
+];
+```
+
+`id_linea_de_obligacion` is cast to `array`, so multiple credit lines can be attached to a single interaction. `agent_id` is a foreign key to `users.id`.
+
+### `IntSeguimiento` (table: `int_seguimiento`)
+
+```php
+protected $fillable = [
+    'id_interaction', 'agent_id', 'id_user_asignacion',
+    'outcome', 'next_action_type', 'next_action_date',
+    'next_action_notes', 'attachment_urls', 'interaction_url',
+];
+```
+
+`attachment_urls` is cast to `array` so multiple S3 paths can be stored per follow-up.
+
+### User relationships
+
+```php
+// User.php
+
+// All interactions where the user is the agent
+public function interactions()
+{
+    return $this->hasMany(Interaction::class, 'agent_id');
+}
+
+// Follow-ups logged by this user (as agent_id)
+public function seguimientosRegistrados()
+{
+    return $this->hasMany(\App\Models\Interacciones\IntSeguimiento::class, 'agent_id');
+}
+
+// Follow-ups assigned to this user
+public function seguimientosAsignados()
+{
+    return $this->hasMany(\App\Models\Interacciones\IntSeguimiento::class, 'id_user_asignacion');
+}
+```
+
+## Logging an Interaction with a Follow-up
+
+<Steps>
+  <Step title="Open the create form">
+    Navigate to `GET /interactions/create`. The form pre-fills the authenticated user's area and cargo from the `gdo_area` and `gdo_cargo` tables.
+
+    ```http
+    GET /interactions/create
+    ```
+  </Step>
+
+  <Step title="Search for a client">
+    Start typing a member's name or ID in the client field. An AJAX call hits `GET /interactions/search-clients?q={term}` and returns paginated results from `mae_terceros`.
+
+    ```http
+    GET /interactions/search-clients?q=garcia
+    ```
+  </Step>
+
+  <Step title="Fill in interaction details">
+    Required fields when submitting `POST /interactions`:
+
+    ```php
+    // Validation rules from InteractionController@store
+    'client_id'           => 'required',
+    'interaction_date'    => 'required|date',
+    'interaction_channel' => 'required',   // FK → int_channels.id
+    'interaction_type'    => 'required',   // FK → int_types.id
+    'outcome'             => 'required',   // FK → int_outcomes.id
+    'notes'               => 'nullable|string',
+    'duration'            => 'nullable|integer|min:0', // seconds
+    'attachment'          => 'nullable|file|mimes:jpeg,png,pdf,jpg,doc,docx|max:10240',
+    ```
+
+    Optional caller identification fields (`cedula_quien_llama`, `nombre_quien_llama`, `celular_quien_llama`, `parentesco_quien_llama`) are used when a third party calls on behalf of the member.
+  </Step>
+
+  <Step title="Schedule a follow-up">
+    Add `next_action_date`, `next_action_type`, and `next_action_notes` to the same form submission. A new `IntSeguimiento` record is automatically created during `store()` when any of these fields are present.
+
+    ```php
+    'next_action_date'  => 'nullable|date',
+    'next_action_type'  => 'nullable',     // FK → int_next_actions.id
+    'next_action_notes' => 'nullable|string',
+    ```
+  </Step>
+
+  <Step title="View and update the interaction">
+    Access `GET /interactions/{interaction}/show` to see the full timeline of follow-ups, agent performance chart, and client history. Add new follow-ups directly from the show page via the `POST /interactions/seguimientos/store` endpoint.
+
+    ```http
+    POST /interactions/seguimientos/store
+    Content-Type: application/x-www-form-urlencoded
+
+    id_interaction=42&outcome=3&id_user_asignacion=7&next_action_notes=Llamar+la+próxima+semana&next_action_date=2025-02-10
+    ```
+  </Step>
+
+  <Step title="Mark follow-up complete">
+    Submit a new `IntSeguimiento` with an outcome whose `estado=1`. The parent `Interaction.outcome` is updated automatically by `IntSeguimientoController@store`:
+
+    ```php
+    $parent->update([
+        'outcome' => $request->outcome,
+        'id_user_asignacion' => $request->id_user_asignacion,
+    ]);
+    ```
+  </Step>
+</Steps>
+
+## Interaction Index (Server-Side DataTable)
+
+The `GET /interactions` index serves a Blade view on normal requests and returns server-side JSON for DataTables AJAX calls. Agents without the `interacciones.listado.todos` permission see only their own interactions:
+
+```php
+if (!auth()->user()->hasPermission('interacciones.listado.todos')) {
+    $baseQuery->where(fn ($q) =>
+        $q->where('agent_id', Auth::id())
+          ->orWhere('id_user_asignacion', Auth::id())
+    );
+}
+```
+
+Supported DataTable filter parameters: `tab` (`all`, `success`, `pending`, `today`, `overdue`), `start_date`, `end_date`, `search[value]`.
+
+## Reports and PDF Export
+
+The `GET /interactions/report` page renders KPI cards (total, successful, pending, overdue) and six chart datasets — by channel, outcome, top agents, top clients, credit lines, and district. Supervisors with the `interacciones.informes.todosagentes` permission can filter by any agent; others are restricted to their own data.
+
+```http
+GET /interactions/report?start_date=2025-01-01&end_date=2025-01-31&agent_id=5
+```
+
+The `GET /interactions/report/pdf` route generates a complete audit PDF using `barryvdh/laravel-dompdf` and streams it directly to the browser.
+
+## Chat and Workspaces
+
+The `GET /interactions/chat` route (requires `interacciones.chat.index` permission) opens the three-column chat interface:
+
+1. **Column 1 — Workspaces**: Active workspaces from `int_workspaces` where `status = 'active'`.
+2. **Column 2 — Conversations**: Conversations in the selected workspace, filtered by `workspace_id`.
+3. **Column 3 — Messages**: Full message thread with participant list and roles.
+
+### Creating a workspace
+
+```http
+POST /interactions/workspaces
+
+name=Equipo+Cartera&description=Gestión+de+cobros&area_id=3
+```
+
+`IntWorkspaceController@store` validates that `area_id` exists in `gdo_area` and sets `status = 'active'` automatically.
+
+### Starting a private conversation
+
+```http
+POST /interactions/conversations/private
+
+target_user_id=12
+```
+
+`IntConversationController@iniciarChatPrivado` looks for an existing `type=private` conversation between the two users before creating a new one, preventing duplicate DMs.
+
+### Creating a contextual room
+
+```http
+POST /interactions/conversations/contextual
+
+workspace_id=2&name=Caso+#42&visibility=internal&chatable_type=App\Models\Interacciones\Interaction&chatable_id=42&user_ids[]=5&user_ids[]=8&role_id=2
+```
+
+A contextual room ties the conversation to a specific model instance (e.g. a follow-up or interaction), making it easy to discuss a case without leaving the CRM.
+
+## Attachment Storage
+
+Attachments uploaded during interaction creation or follow-up updates are stored in S3 under the path `corpentunida/daytrack/{interaction_id}/`. Temporary signed URLs (10-minute validity) are generated on demand via:
+
+```http
+GET /interactions/attachment/view/{fileName}
+GET /interactions/attachment/download/{fileName}
+```
+
+<Tip>
+  Use **workspaces** to organise agents by team or department. Each workspace maps to a `gdo_area`, so you can create dedicated spaces for collections, credit, and member services teams without mixing conversations. Private DMs are automatically routed to a dedicated workspace (ID 4) to keep team channels uncluttered.
+</Tip>

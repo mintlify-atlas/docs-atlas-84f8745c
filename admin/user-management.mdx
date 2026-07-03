@@ -1,0 +1,207 @@
+---
+title: "User Management: Accounts, Roles, and Permissions Administration"
+sidebarTitle: "User Management"
+description: "Create and manage Corpen user accounts, assign roles, configure permissions, and link users to employee profiles via the admin panel."
+---
+
+Corpen's user management system controls who can access the platform and what each person can do within it. Built on top of Spatie Permission, it combines a custom `actions` pivot table for role assignments with a `model_has_permissions` table for fine-grained per-user permission overrides. Administrators manage all accounts, roles, and permissions through three dedicated resource controllers registered under the `auth` middleware.
+
+## Admin Routes
+
+| Method | URI | Controller Action | Route Name |
+|--------|-----|-------------------|------------|
+| GET | `/users` | `UserController@index` | `admin.users.index` |
+| GET | `/users/create` | `UserController@create` | `admin.users.create` |
+| POST | `/users` | `UserController@store` | `admin.users.store` |
+| GET | `/users/{user}/edit` | `UserController@edit` | `admin.users.edit` |
+| PUT/PATCH | `/users/{user}` | `UserController@update` | `admin.users.update` |
+| GET | `/roles` | `RoleController@index` | `admin.roles.index` |
+| POST | `/roles` | `RoleController@store` | `admin.roles.store` |
+| PUT/PATCH | `/roles/{role}` | `RoleController@update` | `admin.roles.update` |
+| DELETE | `/roles/{id}` | `RoleController@destroy` | `admin.roles.destroy` |
+| GET | `/permisos/create` | `PermissionsController@create` | `admin.permisos.create` |
+| POST | `/permisos` | `PermissionsController@store` | `admin.permisos.store` |
+
+All three resource routes are protected by the `auth` middleware. The `/users` route additionally requires the `candirect:admin.users.index` middleware gate.
+
+---
+
+## User Model
+
+The `App\Models\User` model extends Laravel's `Authenticatable` and uses the Spatie `HasRoles` trait. Its mass-assignable fields are:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `string` | Full name, stored in uppercase |
+| `email` | `string` | Unique login email address |
+| `password` | `string` (hashed) | Bcrypt-hashed password |
+| `nid` | `string` | National ID (cédula) — used to link the user to an employee profile |
+| `fecha_nacimiento` | `date` | Date of birth — used in the associate validation flow |
+| `type` | `string\|null` | User category; standard admin-panel users have `type = null` |
+
+<Warning>
+  The `nid` field must exactly match the `cedula` column in the `GDO_Empleados` table. If they do not match, the `perfilEmpleado()` relationship will return `null` and the profile photo fetched from S3 via `$user->foto_perfil` will not be available.
+</Warning>
+
+### Custom Accessors and Methods
+
+**`getNombreCortoAttribute()`**
+Returns the first two space-separated parts of the user's `name`. Useful for compact UI display:
+
+```php
+// $user->name = "CARLOS ANDRÉS PÉREZ GÓMEZ"
+echo $user->nombre_corto; // "CARLOS ANDRÉS"
+```
+
+**`hasPermission($permiso)`**
+Checks whether the user has a given permission via the `model_has_permissions` pivot:
+
+```php
+if ($user->hasPermission('creditos.index')) {
+    // grant access
+}
+```
+
+**`hasDirectPermission($permiso)`**
+Delegates to Spatie's `getDirectPermissions()` to verify only directly assigned (non-role-inherited) permissions:
+
+```php
+$user->hasDirectPermission('admin.users.index');
+```
+
+### Employee Profile Integration
+
+**`perfilEmpleado()`** — `hasOne(GdoEmpleado::class, 'cedula', 'nid')`
+
+Joins the user to their `GDO_Empleados` record by matching `users.nid` against `GDO_Empleados.cedula`.
+
+**`getFotoPerfilAttribute()`**
+
+Accessor (`$user->foto_perfil`) that returns a signed route URL to the employee's photo stored in S3. Returns `null` when no photo is on record, allowing views to fall back to initials or a placeholder avatar.
+
+```php
+$url = $user->foto_perfil;
+// Returns: route('archivo.empleado.verFoto', ['id' => $empleado->id])
+// or null if no photo exists
+```
+
+---
+
+## Role Model
+
+The `App\Models\Role` model maps to the `roles` table. Fillable fields are `id`, `name`, and `guard_name`. It exposes two permission relationships:
+
+- **`permissions()`** — `belongsToMany(Permisos::class, 'role_has_permissions')` — the Spatie pivot table linking roles to permissions.
+- **`permissionsRole()`** — `hasMany(Permisos::class, 'role_id')` — permissions that list this role as their primary `role_id`.
+
+Role names are stored in lowercase.
+
+---
+
+## Permissions Model
+
+The `App\Models\Permisos` model maps to the `permissions` table. Fillable fields are `id`, `name`, `guard_name`, and `role_id`. A permission belongs to a role through `rolePermission()` (`belongsTo(Role::class, 'role_id')`).
+
+---
+
+## Setting Up Users, Roles, and Permissions
+
+<Steps>
+  <Step title="Create a Permission">
+    Navigate to `/permisos/create` in the admin panel and submit the form, or create one programmatically. The permission name should follow dot-notation convention (e.g., `creditos.index`):
+
+    ```php
+    use Spatie\Permission\Models\Permission;
+
+    Permission::create([
+        'name'       => 'creditos.index',
+        'guard_name' => 'web',
+        'role_id'    => 3, // optional: bind to a role
+    ]);
+    ```
+  </Step>
+
+  <Step title="Create a Role">
+    Navigate to `/roles` and use the creation form, or use tinker. Role names are forced to lowercase by `RoleController@store`:
+
+    ```php
+    use App\Models\Role;
+
+    Role::create([
+        'name'       => 'analista-creditos',
+        'guard_name' => 'web',
+    ]);
+    ```
+  </Step>
+
+  <Step title="Assign Permissions to the Role">
+    Open the role's edit view at `/roles/{role}/edit` and select the permissions to attach. Programmatically:
+
+    ```php
+    $role = Role::where('name', 'analista-creditos')->first();
+
+    // Attach individual permissions
+    $role->permissions()->attach([1, 4, 7]);
+
+    // Or detach removed permissions
+    $role->permissions()->detach([2]);
+    ```
+
+    The `RoleController@update` method performs a diff between the current permission list and the submitted list, then calls `attach()` and `detach()` accordingly — no duplicates are inserted.
+  </Step>
+
+  <Step title="Create a User Account">
+    Navigate to `/users/create`. The form requires a full name, email, password, and at least one role selection. `UserController@store` uppercases the name, bcrypt-hashes the password, creates an `actions` pivot record for each selected role, and copies the role's permissions into `model_has_permissions`:
+
+    ```php
+    use App\Models\User;
+    use App\Models\Action;
+
+    $user = User::create([
+        'name'     => strtoupper('María López Reyes'),
+        'email'    => 'maria.lopez@corpentunida.com',
+        'password' => bcrypt('secret'),
+        'nid'      => '1023456789', // must match GDO_Empleados.cedula
+    ]);
+
+    // Assign a role via the actions pivot
+    Action::create([
+        'user_email' => $user->email,
+        'user_id'    => $user->id,
+        'role_id'    => 3,
+    ]);
+    ```
+  </Step>
+
+  <Step title="Adjust Per-User Permissions (Optional)">
+    After account creation, open `/users/{user}/edit`. Individual permissions can be added or removed on top of what the role already grants. `UserController@update` syncs the `model_has_permissions` pivot using the same diff-and-attach pattern used for roles:
+
+    ```php
+    // Add a direct permission not included in the role
+    $user->permissions()->attach([12], ['model_type' => 'App\Models\User']);
+
+    // Remove a permission
+    $user->permissions()->detach([5]);
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Searching Users
+
+The `UserController@show` method provides a live search over `name` and `email` for users whose `type` is `null` (standard users). It returns a paginated result of 5 records per page:
+
+```
+GET /users?query=maria
+```
+
+---
+
+## Associate (Asociado) Self-Registration
+
+Corpen also supports a member self-registration flow through `UserController@validarAsociadoCreate` and `UserController@validarAsociado`. These routes validate a prospect's `nid` (cédula) and `fecha_nacimiento` against an external API endpoint configured via `API_PRODUCCION` and `TOKEN_ADMIN` environment variables before allowing account creation.
+
+<Note>
+  Associates registered through the self-registration flow have a non-null `type` field. The admin user list at `/users` only shows users where `type IS NULL`, keeping standard and associate accounts in separate views.
+</Note>

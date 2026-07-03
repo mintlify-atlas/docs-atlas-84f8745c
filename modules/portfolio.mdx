@@ -1,0 +1,185 @@
+---
+title: "Portfolio Module: Accounts Receivable and Payment Agreements"
+sidebarTitle: "Portfolio"
+description: "Manage accounts receivable, payment proof uploads, and debt restructuring agreements in Corpen's Cartera module."
+---
+
+The Portfolio module (`/cartera`) manages the cooperative's accounts receivable. It provides three distinct capabilities: a delinquency list generated from an Excel upload (`ReadExelController`), a payment-proof (comprobante de pago) registration system where members upload evidence of their payments (`CarComprobantePagoController`), and a payment-agreement engine for restructuring delinquent debts (`AcuerdoController`). All routes are protected by the `auth` middleware.
+
+Payment vouchers uploaded in this module are the **right-hand side** of the reconciliation view in the Accounting module. Once an operator links a voucher to a bank transaction, the voucher's `estado` transitions from `pendiente` to `conciliado` and is excluded from subsequent reconciliation passes.
+
+---
+
+## Route reference
+
+| Method | URL | Route name | Handler | Description |
+|---|---|---|---|---|
+| `GET` | `/cartera` | `cartera.morosos.index` | `ReadExelController@index` | Portfolio / delinquency list |
+| `POST` | `/cartera` | `cartera.morosos.store` | `ReadExelController@store` | Upload Excel for delinquency processing |
+| `POST` | `/cartera/pdfMora` | `cartera.morosos.pdfMora` | `ReadExelController@pdfMora` | Generate delinquency PDF |
+| `GET` | `/cartera/comprobantes` | `cartera.comprobantes.index` | `CarComprobantePagoController@index` | List payment vouchers |
+| `GET` | `/cartera/comprobantes/create` | `cartera.comprobantes.create` | `CarComprobantePagoController@create` | New voucher form |
+| `POST` | `/cartera/comprobantes` | `cartera.comprobantes.store` | `CarComprobantePagoController@store` | Submit voucher (JSON response) |
+| `GET` | `/cartera/comprobantes/{id}` | `cartera.comprobantes.show` | `CarComprobantePagoController@show` | View voucher |
+| `PUT` | `/cartera/comprobantes/{id}` | `cartera.comprobantes.update` | `CarComprobantePagoController@update` | Update voucher |
+| `DELETE` | `/cartera/comprobantes/{id}` | `cartera.comprobantes.destroy` | `CarComprobantePagoController@destroy` | Delete voucher and S3 file |
+| `GET` | `/cartera/acuerdos` | `acuerdos.index` | `AcuerdoController@index` | List agreements |
+| `GET` | `/cartera/acuerdos/create` | `acuerdos.create` | `AcuerdoController@create` | New agreement form |
+| `POST` | `/cartera/acuerdos` | `acuerdos.store` | `AcuerdoController@store` | Persist agreement |
+| `GET` | `/cartera/acuerdos/{id}` | `acuerdos.show` | `AcuerdoController@show` | Agreement detail |
+| `GET` | `/cartera/acuerdos/{id}/edit` | `acuerdos.edit` | `AcuerdoController@edit` | Edit form |
+| `PUT` | `/cartera/acuerdos/{id}` | `acuerdos.update` | `AcuerdoController@update` | Update agreement |
+| `DELETE` | `/cartera/acuerdos/{id}` | `acuerdos.destroy` | `AcuerdoController@destroy` | Delete agreement |
+
+<Note>
+  The delinquency list routes (`cartera.morosos.*`) require the `can:cartera.listamorosos.generarcarta` permission in addition to authentication. Ensure users who need to view or process the receivables list have this permission assigned.
+</Note>
+
+---
+
+## Payment vouchers (`CarComprobantePago`)
+
+The `car_comprobantes_pagos` table stores each payment proof submitted by a member. The file itself is stored on **Amazon S3** under the path `corpentunida/cartera/comprobantes/{cod_ter_MaeTerceros}`.
+
+### Key fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `cod_ter_MaeTerceros` | integer | Payer identifier (linked to `MaeTerceros`) |
+| `id_obligacion` | integer (nullable) | Obligation being paid |
+| `monto_pagado` | numeric | Amount paid |
+| `fecha_pago` | numeric (14 digits) | Format `YYYYMMDDHHMMSS` — stored as a pure number |
+| `hash_transaccion` | string (unique) | `{id_banco}-{fecha_pago}-{monto_pagado}-{cod_ter_MaeTerceros}` |
+| `ruta_archivo` | string | S3 object key of the supporting file |
+| `id_banco` | integer | FK → `con_cuentas_bancarias` |
+| `numero_cuota` | integer (nullable) | Instalment number |
+| `tipo_pago` | string (nullable, max 100) | Payment method or category |
+| `observacion` | string (nullable, max 255) | Free-text note |
+| `estado` | enum | `pendiente`, `conciliado`, `rechazado` |
+| `id_user` | FK → `users` | User who registered the voucher |
+
+The `store` action returns a **JSON response** rather than a redirect:
+
+```json
+{ "success": true, "message": "Soporte almacenado correctamente." }
+```
+
+If the submitted hash already exists in the database, the controller responds with:
+
+```json
+{
+  "success": false,
+  "is_duplicate": true,
+  "message": "Ya existe un pago con estos mismos datos en este segundo exacto. ¿Deseas registrarlo de todas formas?"
+}
+```
+
+The UI can then prompt the user to re-submit with the `force_save: true` flag, which appends `-F-{timestamp}` to the hash to satisfy the unique constraint while still persisting the record.
+
+When a voucher is deleted, the corresponding S3 object is also removed via `Storage::disk('s3')->delete($comprobante->ruta_archivo)`.
+
+### User relationship
+
+The `User` model exposes:
+
+```php
+public function comprobantesRegistrados(): HasMany
+{
+    return $this->hasMany(CarComprobantePago::class, 'id_user');
+}
+```
+
+This allows querying all vouchers submitted by a given user: `$user->comprobantesRegistrados`.
+
+### List view filters
+
+The `index` action accepts the following query parameters:
+
+| Parameter | Effect |
+|---|---|
+| `periodo` | Filter by year-month (format `Y-m`). Default: current month |
+| `is_global` | When present, removes the month filter (searches full history) |
+| `estado` | Filter by voucher state (`pendiente`, `conciliado`, `rechazado`) |
+| `buscar` | Free text search across `cod_ter_MaeTerceros`, `id_interaction`, `id_obligacion`, `monto_pagado`, `numero_cuota`, `pr`, `cco`, `tipo_pago`, `observacion`, `hash_transaccion`, and `id_transaccion_bancaria` |
+
+The index paginates at **500 records per page** to handle high-volume periods.
+
+---
+
+## Payment agreements (`Acuerdo`)
+
+Payment agreements (`car_acuerdos`) allow Corpen to formally restructure a delinquent obligation. Each agreement is linked to a specific credit in `cre_creditos` and captures the financial conditions frozen at the time of the agreement.
+
+### `car_acuerdos` schema
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint (PK) | Auto-increment |
+| `cre_creditos_id` | FK → `cre_creditos` | Delinquent credit being restructured |
+| `numero_acuerdo` | string (unique) | Agreement folio |
+| `fecha_acuerdo` | date | Date the agreement was signed |
+| `estado` | enum | `activo`, `incumplido`, `pagado`, `cancelado` |
+| `dias_mora_inicial` | integer | Days past due at the time of the agreement |
+| `intereses_corrientes_acuerdo` | decimal (15,2) | Normal interest accrued |
+| `intereses_mora_acuerdo` | decimal (15,2) | Penalty interest accrued |
+| `gastos_cobranza` | decimal (15,2, nullable) | Legal or collection costs included |
+| `user_id` | FK → `users` (nullable) | Agent who managed the agreement |
+| `observaciones` | text (nullable) | Special conditions or notes |
+
+The `AcuerdoEstadoEnum` PHP enum defines the valid states:
+
+```php
+enum AcuerdoEstadoEnum: string
+{
+    case VIGENTE    = 'vigente';
+    case INCUMPLIDO = 'incumplido';
+    case PAGADO     = 'pagado';
+    case CANCELADO  = 'cancelado';
+}
+```
+
+The `User` model exposes:
+
+```php
+public function acuerdosRegistrados(): HasMany
+{
+    return $this->hasMany(Acuerdo::class, 'user_id');
+}
+```
+
+---
+
+## Creating a payment agreement
+
+<Steps>
+  <Step title="Navigate to the agreement creation form">
+    Go to `GET /cartera/acuerdos/create`. The form loads all credits from `cre_creditos` in a dropdown and the available agreement states via `AcuerdoEstadoEnum::cases()`.
+  </Step>
+
+  <Step title="Select the delinquent credit">
+    Choose the credit from the dropdown. This populates `cre_creditos_id`, which is the required foreign key linking the agreement to the member's outstanding loan.
+  </Step>
+
+  <Step title="Set the agreement conditions">
+    Complete the financial fields:
+
+    - `numero_acuerdo` — a unique folio for the agreement (e.g. `ACU-2025-001`)
+    - `fecha_acuerdo` — date the agreement was signed
+    - `dias_mora_inicial` — current days past due
+    - `intereses_corrientes_acuerdo` — accrued standard interest
+    - `intereses_mora_acuerdo` — accrued penalty interest
+    - `gastos_cobranza` — any legal costs being included (optional)
+    - `estado` — initial state (`activo` for new agreements)
+    - `observaciones` — any special conditions
+  </Step>
+
+  <Step title="Submit and review">
+    Submit `POST /cartera/acuerdos`. The `StoreAcuerdoRequest` Form Request validates the payload before the controller runs. The authenticated user's ID is automatically injected as `user_id`. On success, you are redirected to `acuerdos.index` with the flash message: *"Acuerdo creado exitosamente."*
+
+    View the agreement at `GET /cartera/acuerdos/{id}` — the `show` action eager-loads both the parent `credito` and the `usuario` who created it.
+  </Step>
+</Steps>
+
+<Warning>
+  A credit may accumulate multiple agreement records over its lifetime (e.g. an `incumplido` agreement followed by a new one). The database does not enforce a single-active-agreement constraint at the schema level, so business logic should verify the current agreement state before creating a new one.
+</Warning>

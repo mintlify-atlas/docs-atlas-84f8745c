@@ -1,0 +1,204 @@
+---
+title: "Five Percent Fund: Savings and Retirement Calculations"
+sidebarTitle: "Five Percent"
+description: "Manage the mandatory five-percent savings fund contributions, third-party records, accounting movements, and retirement liquidation calculations in Corpen."
+---
+
+The Five Percent Fund module tracks the cooperative's mandatory savings programme — a scheme where a portion of member contributions is reserved for retirement benefits. It covers two main domains: accounting movement records (`CIN_MoviCont`) that capture individual contribution entries per account and member, and retirement liquidation calculations (`Retiros`) that compute the total benefit owed to a member based on their years of service and the applicable year-by-year coefficients.
+
+The module is split across two route prefixes: `/cinco` (accounting movements and third-party records) and `/retiros` (retirement calculations and conditions). All routes require authentication and are protected by the `candirect` middleware using the corresponding permission names.
+
+---
+
+## Route reference
+
+| Method | URL | Route name | Handler | Description |
+|---|---|---|---|---|
+| `GET` | `/cinco/terceros` | `cinco.tercero.index` | `TercerosController@index` | List five-percent contributor records |
+| `POST` | `/cinco/terceros` | `cinco.tercero.store` | `TercerosController@store` | Add contributor |
+| `GET` | `/cinco/terceros/{id}/edit` | `cinco.tercero.edit` | `TercerosController@edit` | Edit contributor |
+| `PUT` | `/cinco/terceros/{id}` | `cinco.tercero.update` | `TercerosController@update` | Update contributor |
+| `DELETE` | `/cinco/terceros/{id}` | `cinco.tercero.destroy` | `TercerosController@destroy` | Remove contributor |
+| `GET` | `/cinco/cinco` | `cinco.movcontables.index` | `MoviContCincoController@index` | Accounting movements list |
+| `GET` | `/cinco/cinco` *(search)* | `cinco.movcontables.show` | `MoviContCincoController@show` | Show movements by `id` (cédula) |
+| `GET` | `/cinco/movcontables/{id}/reportepdf/` | `cinco.reportepdf` | `MoviContCincoController@generarpdf` | Download PDF report for a member |
+| `GET` | `/retiros/calculoretiros` | `cinco.retiros.index` | `RetirosListadoController@index` | Retirement calculations list |
+| `GET` | `/retiros/calculoretiros/create` | `cinco.retiros.create` | `RetirosListadoController@create` | New retirement calculation form |
+| `POST` | `/retiros/calculoretiros` | `cinco.retiros.store` | `RetirosListadoController@store` | Persist retirement record |
+| `GET` | `/retiros/calculoretiros/{id}` | `cinco.retiros.show` | `RetirosListadoController@show` | Show retirement detail |
+| `GET` | `/retiros/retirosname/{name}` | `cinco.retiros.search` | `RetirosListadoController@namesearch` | Search contributors by name |
+| `GET` | `/retiros/condicionRetiros` | `cinco.condicionRetiros.index` | `CondicionesRetirosController` | Retirement conditions list |
+| `POST` | `/retiros/condicionRetiros` | `cinco.condicionRetiros.store` | `CondicionesRetirosController@store` | Create year condition |
+| `GET` | `/retiros/condicionRetiros/create` | `cinco.condicionRetiros.create` | `CondicionesRetirosController@create` | New condition form |
+| `GET` | `/retiros/condicionRetiros/{id}/reportepdf/` | `cinco.liquidacionretiro` | `CondicionesRetirosController@generarpdf` | Generate retirement liquidation PDF |
+
+---
+
+## Accounting movements (`CIN_MoviCont`)
+
+The `CIN_MoviCont` table stores every individual contribution entry, keyed by member cédula.
+
+### Schema
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint (PK) | Auto-increment |
+| `CodComprob` | string (nullable) | Voucher code |
+| `NumComprob` | string (nullable) | Voucher number |
+| `ItemComprob` | string (nullable) | Voucher line item |
+| `Fecha` | date (nullable) | Movement date |
+| `Cuenta` | string (nullable) | Account code |
+| `DocRef` | string (nullable) | Reference document |
+| `Base` | string (nullable) | Calculation base |
+| `Cedula` | string (nullable) | Member identification number |
+| `CentroCosto` | string (nullable) | Cost centre |
+| `VrDebitos` | string (nullable) | Debit amount |
+| `VrCreditos` | string (nullable) | Credit amount |
+| `UsuariosAdd` | string (nullable) | User who added the record |
+| `DocSoporte` | string (nullable) | Supporting document reference |
+| `Observacion` | string (nullable) | Free-text observation |
+| `AñoIncio` / `MesIncio` | string | Start year/month of the contribution period |
+| `AñoFin` / `MesFin` | string | End year/month of the contribution period |
+
+### Viewing a member's movements
+
+The `show` action accepts the member's `id` (cédula) as a query parameter rather than a path segment:
+
+```http
+GET /cinco/cinco?id={cedula}
+```
+
+The controller retrieves all movements for that cédula, orders them by `Cuenta` then `id`, and detects **missing contribution periods** by analysing account `416542` (the AP account). It parses the `Observacion` field for date ranges matching the pattern `YYYY-MMM a YYYY-MMM` and identifies gaps in the sequence:
+
+```php
+if (preg_match('/(\d{4})-([A-Z]{3})\s*a\s*(\d{4})-([A-Z]{3})/i', $obs, $match)) {
+    // range detected; compare against previous range end to find gaps
+}
+```
+
+Any missing periods are collected in `$faltantes` and passed to the view so operators can see at a glance which months lack contribution records. The view also loads the member's ministry date (`fec_minis`), IPUC date (`fecha_ipuc`), and first contribution date (`fec_aport`) from the `MaeTerceros` master table.
+
+### PDF report
+
+`GET /cinco/movcontables/{id}/reportepdf/` generates a landscape letter-sized PDF via `barryvdh/laravel-dompdf` containing all movements grouped by account:
+
+```php
+$pdf = Pdf::loadView('cinco.movcontables.reportepdf', compact(...))
+    ->setPaper('letter', 'landscape');
+return $pdf->download(date('Y-m-d') . ' Reporte ' . $id . '.pdf');
+```
+
+The downloaded filename follows the pattern `YYYY-MM-DD Reporte {cedula}.pdf`.
+
+---
+
+## Retirement calculations (`Retiros`)
+
+The `Retiros` model (backed by `CIN_RetirosListados`) stores the retirement record for each processed member. When a retirement is calculated, the system:
+
+1. Auto-generates a consecutive document number with format `BPA-{YEAR}{NNN}` (e.g. `BPA-2025001`).
+2. Computes the liquidation amount across all qualifying years using two separate formulas — one for years before 2017 and one for years from 2017 onwards.
+3. Stores per-option values in the `RET_retiros_opciones` pivot table.
+
+### Year-by-year liquidation logic
+
+The calculation engine reads the `RET_condicionesRetiros` table which stores a `valor` and `plus` coefficient per year. For pre-2017 years the formula is:
+
+```
+liquidacion = (months_remaining × valor) / 12
+            + (days_remaining × valor) / 12 / 30
+```
+
+For years from 2017 onward, an additional `plus` component applies to members with more than five years of service:
+
+```
+plus = (days_since_start / (365/12)) × plus_coeff
+```
+
+### Name search
+
+`GET /retiros/retirosname/{name}` performs a partial-match search across the `Nom_Ter` field in the `Terceros` table and returns the `cinco.movcontables.search` view. Spaces in the search term are replaced by `%` wildcards:
+
+```php
+$name = str_replace(' ', '%', $request->input('id'));
+$terceros = Terceros::where('Nom_Ter', 'like', '%' . $name . '%')->get();
+```
+
+---
+
+## Retirement liquidation workflow
+
+<Steps>
+  <Step title="Verify the retirement conditions table">
+    Navigate to `GET /retiros/condicionRetiros` and confirm that the `RET_condicionesRetiros` table has a row for every year from the member's start year through to the current year. If a year is missing, create it via `GET /retiros/condicionRetiros/create` and submit `POST /retiros/condicionRetiros`:
+
+    ```
+    anio       integer  — fiscal year
+    valor      numeric  — base liquidation value for the year
+    valorplus  numeric  — plus coefficient (defaults to 0)
+    ```
+  </Step>
+
+  <Step title="Search for the member">
+    Use the name search at `GET /retiros/retirosname/{name}` or navigate directly to `GET /retiros/calculoretiros/show?id={cedula}`. The system looks up the member in `MaeTerceros` using their `Cod_Ter` and loads their `fec_minis` (ministry entry date) to anchor the liquidation range.
+  </Step>
+
+  <Step title="Review the liquidation array">
+    The `show` action calls the internal `liquidaciones($fec_minis)` method which returns an associative array keyed by year. Each value is either a single numeric figure (pre-2017) or a two-element array `[liquidacion, plus]` (2017+). Review this breakdown in the view before proceeding.
+  </Step>
+
+  <Step title="Complete the retirement form">
+    On the `show` view, fill in the retirement parameters:
+
+    - `TipoRetiro` — retirement type (loaded from `RET_TiposRetiros` where `activo = 1`)
+    - `FechaRetiro` — effective retirement date
+    - `FechaUltimoAporte` — date of the last contribution
+    - `fechaInicialLiquidacion` — start date of the liquidation period
+    - `observación` — free-text notes
+    - `beneficiovalor`, `retencionvalor`, `saldosvalor` — financial components of the benefit
+    - Per-option values via the `opcion[{id}]` array (loaded from `Ret_opciones`)
+
+    The total benefit is computed as:
+
+    ```php
+    $totalbeneficios = floatval($beneficiovalor)
+                     - floatval($retencionvalor)
+                     + floatval($saldosvalor);
+    ```
+  </Step>
+
+  <Step title="Submit and generate the document">
+    Submit `POST /retiros/calculoretiros`. The controller inserts the retirement record and all non-zero option values into `RET_retiros_opciones`, then redirects to the detail view.
+
+    To produce the formal liquidation document, call:
+
+    ```http
+    GET /retiros/condicionRetiros/{id}/reportepdf/
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The PDF at `GET /retiros/condicionRetiros/{id}/reportepdf/` currently renders the `cinco.retiros.liquidacionpdf` Blade view (not a streamed download). The `Pdf::download()` call is commented out in `CondicionesRetirosController@generarpdf` — activate it when the view template is production-ready to enable the downloadable PDF export.
+</Note>
+
+---
+
+## Retirement conditions (`RET_condicionesRetiros`)
+
+The conditions table is a simple year-keyed parameter store:
+
+| Column | Notes |
+|---|---|
+| `anio` | Fiscal year |
+| `valor` | Base liquidation value |
+| `plus` | Additional plus coefficient (0 if not applicable) |
+
+Creating a new condition:
+
+```http
+POST /retiros/condicionRetiros
+Body: { anio: 2026, valor: 850000, valorplus: 15000 }
+```
+
+On success: *"Condición de retiro creada exitosamente."*

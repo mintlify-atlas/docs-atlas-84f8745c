@@ -1,0 +1,139 @@
+---
+title: "Reservations Module: Property and Space Booking Management"
+sidebarTitle: "Reservations"
+description: "Manage cooperative properties (inmuebles), create reservations with photo evidence, and view booking dashboards in Corpen's Reservas module."
+---
+
+The Reservas module allows cooperative associates (asociados) to browse available properties, submit booking requests, and upload payment proof, while administrative staff confirm, reject, and close reservations with evidence records. All routes live under the `/reservas` prefix and require `auth` middleware. Email notifications via `ReservaInmueble` Mailable are sent at key lifecycle points—reservation created, confirmed, cancelled, and payment proof received.
+
+## Sub-resources
+
+| Route prefix | Controller | Purpose |
+|---|---|---|
+| `reservas/tablero` | `ResDashboardController::index` | Reservations dashboard view |
+| `reservas/crudinmuebles` | `ResInmuebleController` | Property registry with S3 photo gallery |
+| `reservas/reserva` | `ResReservaController` | Booking CRUD for associates |
+| `reservas/reservaI/{id}/create` | `ResReservaController::createReserva` | Initiate a booking for a specific property |
+| `reservas/reservaI/store` | `ResReservaController::storeReserva` | Submit the booking form |
+| `reservas/reservaI/{id}/soporte` | `ResReservaController::createSoporte` | Upload payment proof |
+| `reservas/verificar/comprobante` | `ResReservaController::reservaspagos` | Admin: view pending payment proofs |
+| `reservas/reservaI/confirmacion` | `ResReservaController::indexConfirmacion` | Admin: confirm/reject pending reservations |
+| `reservas/reservaI/historico` | `ResReservaController::indexHistorico` | Full historical listing of all reservations |
+| `reservas/reservaI/cartera` | `ResReservaController::indexCartera` | Reservations pending payment support |
+
+## Database Schema
+
+The following tables back the Reservas module:
+
+| Table | Purpose |
+|---|---|
+| `res_inmuebles` | Property registry (`name`, `description`, `address`, `city`, `ubicacion` Google Maps URL, `active` flag) |
+| `res_inmueble_fotos` | Photo attachments per property (S3 path in `attached`) |
+| `res_reservas` | Booking records (`user_id`, `nid`, `res_inmueble_id`, `res_status_id`, `fecha_solicitud`, `fecha_inicio`, `fecha_fin`, `soporte_pago`, `puntuacion_asociado`, `puntuacion_admin`) |
+| `res_reserva_evidencias` | Evidence/comment entries created by staff when confirming a booking |
+| `res_statuses` | Status catalog (e.g., pending, confirmed, completed, cancelled) |
+| `res_condicions` | Booking conditions shown to users on confirmation emails |
+
+## Booking Rules
+
+The `storeReserva` method enforces the following business rules before creating a record:
+
+- **Start date in the past**: Rejected if `fechaInicio < today`.
+- **Horizon limit**: Start date cannot be more than 365 days from today.
+- **Stay length**: Maximum stay is 4 nights (`diff->days < 5`).
+- **Annual frequency**: An associate can only have one non-cancelled reservation per rolling 12-month window, checked against `res_status_id != 4`.
+- **Overlap check**: The new booking dates must not intersect any existing reservation in statuses other than 3 (completed) or 4 (cancelled).
+
+```php
+// Overlap check logic
+$existe_reserva = Res_reserva::where('res_inmueble_id', $inmueble_id)
+    ->whereNotIn('res_status_id', [3, 4])
+    ->where(function ($query) use ($fechaInicio, $endDate) {
+        $query
+            ->whereBetween('fecha_inicio', [$fechaInicio, $endDate])
+            ->orWhereBetween('fecha_fin', [$fechaInicio, $endDate])
+            ->orWhere(function ($query) use ($fechaInicio, $endDate) {
+                $query->where('fecha_inicio', '<=', $fechaInicio)
+                      ->where('fecha_fin', '>=', $endDate);
+            });
+    })->first();
+```
+
+## Creating a Reservation End-to-End
+
+<Steps>
+  <Step title="Browse available properties">
+    Associates land on `GET /reservas/reserva` (named `reserva.reserva.index`). The view loads all properties where `active = 1`, with their photo gallery. Each photo path in `res_inmueble_fotos.attached` is resolved to a 5-minute S3 temporary URL at render time:
+
+    ```php
+    $inmueble->fotosrel->map(function ($foto) {
+        if (Storage::disk('s3')->exists($foto->attached)) {
+            $foto->url = Storage::disk('s3')->temporaryUrl(
+                $foto->attached, now()->addMinutes(5)
+            );
+        }
+        return $foto;
+    });
+    ```
+  </Step>
+
+  <Step title="Open the booking form">
+    Click a property to navigate to `GET /reservas/reservaI/{id}/create`. The form shows the property details and a calendar of existing reservations (statuses 1, 2, 5 — pending, confirmed, proof-submitted) to help the associate choose available dates.
+
+    Users with the `reservas.crearreserva.otroasociado` permission can also select another associate's account (`type = ASOCIADO`) to book on their behalf.
+  </Step>
+
+  <Step title="Submit the reservation">
+    `POST /reservas/reservaI/store` validates the dates and business rules, creates the `Res_reserva` with `res_status_id = 1` (pending), and sends a confirmation email to the associate's address via the `ReservaInmueble` Mailable.
+
+    ```php
+    // Validation rules
+    'fechaInicio' => 'required|date',
+    'endDate'     => 'required|date|after:fechaInicio',
+    'description' => 'nullable|string|max:200',
+    ```
+  </Step>
+
+  <Step title="Upload payment proof">
+    Navigate to `GET /reservas/reservaI/{id}/soporte` and submit the payment file. `POST /reservas/reservaI/storeSoporte` validates the file (`max:5120 KB`), stores it on S3 at `corpentunida/reservas/{reserva_id}/`, updates the record's `soporte_pago` path, and advances the status to `5` (proof submitted). An email is sent to the associate confirming receipt.
+  </Step>
+
+  <Step title="Staff confirms or rejects">
+    Authorized staff open `GET /reservas/reservaI/confirmacion` (requires `candirect:reservas.reserva.confirmadas`). They can view the detail at `GET /reservas/reservaI/confirmacion/{id}/show`, then submit `PUT /reservas/reserva/{reserva}` with an `observacion`.
+
+    - Setting `cancelar_reserva = true` moves the status to `4` (cancelled).
+    - Otherwise the status advances to `2` (confirmed).
+
+    The `notificar_pastor` flag triggers an email to the associate with the observation text and outcome.
+  </Step>
+
+  <Step title="Check-in confirmation and rating">
+    When the associate checks in, staff submit `POST /reservas/reservaI/confirmar` with a comment and optional rating. A `Res_reserva_evidencia` record is created, and if a `calificacion` value is included, the status moves to `3` (completed) with `puntuacion_admin`, `observacion_recibido`, `fecha_recibido`, and `user_id_recibido` set. The associate receives an email inviting them to leave their own rating.
+
+    Associates can submit their rating via `POST /reservas/reservaI/calificacion` (`puntuacion_asociado`, `retroalimentacion`, `fecha_retroalimentacion`).
+  </Step>
+</Steps>
+
+<Note>
+All property photos (`res_inmueble_fotos.attached`) and payment proof files (`res_reservas.soporte_pago`) are stored on the configured `s3` disk. S3 temporary URLs are generated at request time with a 5-minute TTL for gallery photos. If you are running the application with a local or GCS storage driver for development, ensure the `s3` disk alias is remapped accordingly in `config/filesystems.php`.
+</Note>
+
+## Property Registration
+
+Properties are managed at `GET /reservas/crudinmuebles` (admin only). Creating a property via `POST /reservas/crudinmuebles` accepts multiple images in the `imagenes[]` array, each stored individually on S3 under `corpentunida/reserva/inmueble_{id}/`:
+
+```php
+// Validation rules for ResInmueble store
+'nombre'       => 'required|string|max:150',
+'descripcion'  => 'required|string|max:500',
+'direccion'    => 'required|string|max:200',
+'ciudad'       => 'required|string|max:100',
+'maps'         => 'required|url',
+'imagenes.*'   => 'image|mimes:jpg,jpeg,png,webp|max:2048',
+```
+
+A property can be toggled between active and inactive at `GET /reservas/crudinmuebles/{id}/toggle` (named `reserva.crudinmuebles.toggle`), which requires `candirect:reservas.inmueble.active`. Inactive properties are hidden from the associate's booking index.
+
+## Automatic Cancellation
+
+A scheduler-triggered endpoint at `GET /scheduler-run` (named `reservas.cancelar.auto`) cancels all pending reservations (`res_status_id = 1`) that were created on or after `2026-04-08` and have not received payment proof within 5 days of the `fecha_solicitud`. Each cancelled reservation triggers a notification email to the associate. The endpoint returns a JSON response with the count of cancelled records.

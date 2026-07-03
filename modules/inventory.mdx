@@ -1,0 +1,191 @@
+---
+title: "Inventory Module: Asset Tracking and Warehouse Management"
+sidebarTitle: "Inventory"
+description: "Track assets, manage warehouses, record purchases and maintenance events, and view inventory movements in Corpen's Inventario module."
+---
+
+The Inventario module provides end-to-end asset lifecycle management for the cooperative: from purchase order registration and automatic asset creation, through warehouse assignments and state changes tracked as signed actas (PDF acts), to maintenance records and warranty alerts. All routes are grouped under `/inventario` with `auth` middleware. The module integrates Chart.js dashboards at both the global (tablero) and per-resource level, and supports PDF and Excel exports using DomPDF and PhpSpreadsheet.
+
+## Key Sub-modules
+
+<CardGroup cols={2}>
+  <Card title="Assets (Activos)" icon="box-archive">
+    The central entity. Each `InvActivo` is created automatically when a purchase detail line is saved. It holds `nombre`, `codigo_activo`, `serial`, `id_Estado`, `id_ultimo_usuario_asignado`, warranty dates, and a link back to its purchase detail. Search and filter by text, warehouse, brand, subgroup, and state.
+  </Card>
+  <Card title="Warehouses (Bodegas)" icon="warehouse">
+    `InvBodega` records define physical storage locations. Assets are associated with a warehouse via the `InvReferencia` link (`id_InvBodegas`). The dashboard shows per-warehouse asset counts.
+  </Card>
+  <Card title="Purchases (Compras)" icon="receipt">
+    `InvCompra` records capture supplier invoices (`numero_factura`, `fecha_factura`, `total_pago`, payment method, optional S3 egreso attachment). Each purchase has detail lines (`InvDetalleCompra`) that drive automatic `InvActivo` creation in a single DB transaction.
+  </Card>
+  <Card title="Movements (Movimientos)" icon="arrows-rotate">
+    Actas de movimiento group one or more assets under a single `codigo_acta`. Each acta updates the state and assigned user of every included asset. Signed PDF actas can be uploaded back to S3 via `POST /inventario/movimientos/{id}/upload`.
+  </Card>
+</CardGroup>
+
+## Full Sub-module List
+
+| Controller | Route prefix | Purpose |
+|---|---|---|
+| `TableroInventarioController` | `inventario/tablero` | Main dashboard with Chart.js graphs |
+| `CompraController` | `inventario/compras` | Purchase (invoice) CRUD + auto asset generation |
+| `MovimientoController` | `inventario/movimientos` | Movement actas with signed PDF upload |
+| `MantenimientoController` | `inventario/mantenimientos` | Maintenance and repair records |
+| `ActivoController` | `inventario/activos` | Asset master file with PDF/Excel reports and warranty alerts |
+| `MarcaController` | `inventario/marcas` | Brand catalog |
+| `BodegaController` | `inventario/bodegas` | Warehouse catalog |
+| `EstadoController` | `inventario/estados` | Asset state catalog |
+| `MetodoPagoController` | `inventario/metodos-pago` | Payment method catalog |
+| `ClasificacionController` | `inventario/clasificacion` | Hierarchical classification: Grupo → Linea → Tipo → Subgrupo |
+
+## Database Tables
+
+| Table | Purpose |
+|---|---|
+| `inv_activos` | Asset master records |
+| `inv_compras` | Purchase/invoice headers |
+| `inv_detalle_compras` | Purchase line items (with soft deletes) |
+| `inv_movimientos` | Movement acta headers |
+| `inv_movimientos_detalle` | Per-asset entries within a movement |
+| `inv_mantenimientos` | Maintenance/repair records |
+| `inv_referencias` | Product reference catalog (links marca + subgrupo + bodega) |
+| `inv_marcas` | Brand catalog |
+| `inv_bodegas` | Warehouse catalog |
+| `inv_estados` | Asset state catalog (also used as movement type) |
+| `inv_metodos` | Payment method catalog |
+| `inv_subgrupos` | Classification subgroups |
+| `inv_tipos` | Classification types |
+| `inv_lineas` | Classification lines |
+| `inv_grupos` | Classification groups |
+
+## Adding a New Asset to Inventory
+
+<Steps>
+  <Step title="Set up the reference catalog">
+    Before recording a purchase, ensure the asset's product reference exists. Navigate to `GET /inventario/compras/create` and use the **Nueva Referencia** modal (AJAX) to create one if needed.
+
+    ```
+    POST /inventario/referencias/ajax
+    Body: {
+      referencia: required|string|unique:inv_referencias,
+      id_InvSubGrupos: required|exists:inv_subgrupos,id,
+      id_InvBodegas:   required|exists:inv_bodegas,id,
+      id_InvMarcas:    required|exists:inv_marcas,id,
+      detalle:         nullable|string
+    }
+    ```
+
+    Existing references can be updated inline via `PUT /inventario/referencias/ajax/{id}`.
+  </Step>
+
+  <Step title="Record the purchase">
+    Submit `POST /inventario/compras`. The controller wraps everything in a DB transaction:
+
+    ```php
+    // Purchase header validation
+    'cod_ter_proveedor' => 'required|exists:MaeTerceros,cod_ter',
+    'numero_factura'    => 'required|unique:inv_compras,numero_factura',
+    'fecha_factura'     => 'required|date',
+    'total_pago'        => 'required|numeric|min:0',
+    'id_InvMetodos'     => 'required|exists:inv_metodos,id',
+    'detalles'          => 'required|array|min:1',
+    'detalles.*.invReferencias_id' => 'required|exists:inv_referencias,id',
+    'detalles.*.cantidad'          => 'required|numeric|min:0.01',
+    'detalles.*.precio'            => 'required|numeric|min:0',
+    ```
+
+    IVA and miscellaneous costs are stored as zero-quantity `InvDetalleCompra` lines with descriptive `detalle` values (`IVA Total ($)` / `Otros Costos / Varios ($)`).
+  </Step>
+
+  <Step title="Automatic asset creation">
+    For each purchase detail line, the controller creates `(int) $item['cantidad']` `InvActivo` records in a loop. Each asset is initialized with:
+
+    - `nombre` → the subgroup name from the reference
+    - `id_Estado = 1` (first/default state)
+    - `id_MaeMunicipios = 382`
+    - `invReferencias_id` → from the detail
+    - `fecha_inicio_garantia` → the purchase date
+    - `id_InvDetalleCompras` → the detail line ID
+
+    ```php
+    for ($i = 0; $i < $cantidadActivos; $i++) {
+        InvActivo::create([
+            'nombre'                 => $nombreSubgrupo,
+            'id_Estado'              => 1,
+            'id_InvDetalleCompras'   => $detalle->id,
+            'invReferencias_id'      => $detalle->invReferencias_id,
+            'fecha_inicio_garantia'  => $compra->fecha_factura,
+            'id_usersRegistro'       => auth()->id(),
+        ]);
+    }
+    ```
+  </Step>
+
+  <Step title="Update the asset's technical record">
+    Open `GET /inventario/activos/{id}/edit` to fill in the remaining fields: `codigo_activo`, `serial`, `id_Estado`, `vida_util_meses`, warranty end date, assigned user, and municipality. Changes are persisted via `PUT /inventario/activos/{id}`.
+
+    ```php
+    'codigo_activo'         => 'required|string|unique:inv_activos,codigo_activo,{id}',
+    'fecha_inicio_garantia' => 'nullable|date',
+    'fecha_fin_garantia'    => 'nullable|date|after_or_equal:fecha_inicio_garantia',
+    'vida_util_meses'       => 'nullable|integer|min:0',
+    ```
+  </Step>
+
+  <Step title="Generate a movement acta">
+    Navigate to `GET /inventario/movimientos/create` and select one or more assets plus an assignment type (state). Submit `POST /inventario/movimientos`:
+
+    ```php
+    'codigo_acta'              => 'required|unique:inv_movimientos,codigo_acta',
+    'id_InvTiposRegistros'     => 'required|exists:inv_estados,id',
+    'id_usersAsignado'         => 'required|exists:users,id',
+    'activos_seleccionados'    => 'required|array|min:1',
+    ```
+
+    The controller wraps creation in a DB transaction. If the selected state name contains `disponible` or `devuel` (case-insensitive), the acta is treated as a **return** and `id_ultimo_usuario_asignado` is set to `null`; otherwise the user is assigned.
+
+    Download the unsigned acta PDF via `GET /inventario/movimientos/{id}/pdf`. Upload the signed version via `POST /inventario/movimientos/{id}/upload` (`mimes:pdf`, max 5 MB → stored at `corpentunida/inventario/{timestamp}_{original_name}`).
+  </Step>
+</Steps>
+
+## Warranty Alerts
+
+`GET /inventario/activos/alertas` surfaces all assets whose `fecha_fin_garantia` is null or falls within the next 30 days. The view includes two KPI cards (expired vs. expiring) and a Chart.js pie chart. Filters by `search` (name or `codigo_activo`) and `estado_garantia` (`vencido` / `por_vencer`) are available.
+
+## Reports
+
+<Tabs>
+  <Tab title="PDF Report">
+    ```
+    GET /inventario/activos/reporte-pdf?bodega_id=X&marca_id=Y&search=Z
+    ```
+    Applies the same filter engine as the index and generates a DomPDF `letter` landscape report with asset totals. Downloaded as `Reporte_Inventario_{Ymd}.pdf`.
+  </Tab>
+  <Tab title="Excel Report">
+    ```
+    GET /inventario/activos/reporte-excel?bodega_id=X&subgrupo_id=Y
+    ```
+    Streams an `.xlsx` file via PhpSpreadsheet with 10 columns: Descripción, Marca, Categoría, Código/Placa, Serial, Bodega, Municipio, Estado, Fin Garantía, Responsable. Columns are auto-sized. Downloaded as `Reporte_Inventario_{Ymd_Hi}.xlsx`.
+  </Tab>
+  <Tab title="Purchase Invoice PDF">
+    ```
+    GET /inventario/compras/{id}/descargar-factura
+    ```
+    Generates a DomPDF invoice for the purchase, downloaded as `Factura_{numero_factura}.pdf`.
+  </Tab>
+</Tabs>
+
+## Classification Hierarchy
+
+Asset categorization follows a four-level hierarchy managed by `ClasificacionController`:
+
+```
+Grupo → Linea → Tipo → Subgrupo (inv_subgrupos)
+```
+
+Each `InvReferencia` is linked to one `InvSubgrupo`. Dynamic AJAX selects are available to populate dependent levels:
+
+```
+GET /inventario/clasificacion/lineas/{grupo_id}    →  inventario.ajax.lineas
+GET /inventario/clasificacion/subgrupos/{linea_id} →  inventario.ajax.subgrupos
+```

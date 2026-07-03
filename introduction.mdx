@@ -1,0 +1,68 @@
+---
+title: "Corpen: Enterprise ERP for Cooperative Organizations"
+sidebarTitle: "Introduction"
+description: "Corpen is a Laravel 11 multi-module ERP platform built for cooperatives, unifying member management, finance, insurance, document workflows, and CRM in one system."
+---
+
+Corpen is a comprehensive enterprise resource planning platform built specifically for cooperative organizations in Colombia. It is developed on Laravel 11 and PHP 8.2, with Livewire 3 powering reactive UI components throughout the system. Rather than a collection of loosely coupled tools, Corpen is a single, unified codebase where every domain — from exequial service management and insurance policies to accounting reconciliation, document archiving, and CRM interactions — shares the same authentication layer, role-permission model, and data foundation. The result is a platform that mirrors how Colombian cooperatives actually operate: tightly integrated, compliance-aware, and built around the real workflows of their administrative, financial, and pastoral teams.
+
+## Who Corpen Is For
+
+Corpen is designed for **cooperative organizations** (cooperativas) and similar solidarity-economy entities in Colombia. It is particularly suited to organizations that manage:
+
+- A membership base of associates (pastors, congregations, or cooperative members) with biographical and financial records
+- Insurance and exequial service programs offered directly to members
+- Internal credit and portfolio management
+- A document management and correspondence lifecycle under Colombian archival regulations
+- CRM-style tracking of interactions, visits, and support tickets with members and third parties
+
+Corpen assumes that multiple internal roles — administrative staff, financial analysts, support agents, inventory managers — share access to the same system with strictly scoped permissions.
+
+## Key Capabilities
+
+Corpen ships with **eighteen functional modules** organized into five domains:
+
+| Domain | Modules |
+|---|---|
+| **Member Management** | Associates (`asociados`), Demographics (`demograficos`), Master Data (`maestras`) |
+| **Finance** | Accounting (`contabilidad`), Portfolio (`cartera`), Collections (`recaudo`), Credits (`creditos`), Five-Percent Fund (`cinco`) |
+| **Operations** | Exequial Services (`exequiales`), Insurance (`seguros`), Reservations (`reservas`), Inventory (`inventario`) |
+| **Document & Correspondence** | Document Archive (`archivo`), Correspondence (`correspondencia`), Workflows (`flujo`) |
+| **CRM & Engagement** | CRM Interactions (`interactions`), Visits (`visitas`), Support Tickets (`soportes`), Indicators & Quizzes (`indicators`) |
+
+Every module exposes its own route group, controller namespace, and Blade view tree, while sharing the Spatie Permissions layer for access control.
+
+## Technology Stack
+
+Corpen is built on a modern, production-ready PHP stack:
+
+- **Runtime:** PHP 8.2+, Laravel 11, Laravel Jetstream 5, Laravel Sanctum 4
+- **Frontend:** Livewire 3, Blade templates, Tailwind CSS (with `@tailwindcss/forms` and `@tailwindcss/typography`), Vite
+- **Fonts:** Figtree (via Tailwind theme extension)
+- **Permissions:** `spatie/laravel-permission` 6.9 — roles (`admin`, `exequial`, `creditos`, `seguros`, `read`) and direct permissions via custom `CanDirect` middleware
+- **Data & Exports:** `maatwebsite/excel` 3.1, `phpoffice/phpspreadsheet` 1.30, `barryvdh/laravel-dompdf` 2.2
+- **Cloud Storage:** AWS S3 via `league/flysystem-aws-s3-v3` 3.0 and Google Cloud Storage via `google/cloud-storage` 1.48; SFTP also supported via `league/flysystem-sftp-v3`
+- **Google Integration:** `google/apiclient` 2.15 (used for Google Drive operations in `GoogleDriveService`)
+- **Charts:** `arielmejiadev/larapex-charts` 2.1 (ApexCharts wrapper for dashboards)
+- **Dev Tools:** Laravel Pint, Laravel Sail, Faker, PHPUnit 11, Spatie Ignition
+
+<Note>
+  Corpen includes **Progressive Web App (PWA)** support via `silviolleite/laravelpwa` 2.0. An offline fallback view is served at `/offline`, allowing the application to be installed as a native-like app on mobile and desktop devices — a key accessibility feature for field agents visiting cooperative members.
+</Note>
+
+## Explore the Documentation
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install and run Corpen locally in under 10 minutes using Docker Compose or a standard Laravel environment.
+  </Card>
+  <Card title="Architecture" icon="building-columns" href="/architecture">
+    Understand the module structure, route groups, middleware layers, and folder conventions that organize the platform.
+  </Card>
+  <Card title="Modules: Finance" icon="coin" href="/architecture#finance">
+    Accounting reconciliation, cartera morosos, recaudo, credits, and the five-percent fund module.
+  </Card>
+  <Card title="Modules: CRM & Engagement" icon="users" href="/architecture#crm-engagement">
+    Interactions, visits, support tickets, and the indicators quiz system for member engagement.
+  </Card>
+</CardGroup>

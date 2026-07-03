@@ -1,0 +1,287 @@
+---
+title: "File Storage: S3, Google Cloud, and Local Storage in Corpen"
+sidebarTitle: "Storage"
+description: "Configure Corpen's file storage backends — AWS S3, Google Cloud Storage, SFTP, or local disk — for employee photos, reservations evidence, and document archives."
+---
+
+Corpen stores user-uploaded files — employee photos, property images, correspondence signatures, document archives, payment receipts, and generated PDF reports — using Laravel's Filesystem abstraction. Out of the box, all production uploads go to **AWS S3** through `Storage::disk('s3')`. The `google/cloud-storage` and `league/flysystem-sftp-v3` packages are also installed, so the platform can be reconfigured for Google Cloud Storage or SFTP without code changes.
+
+## Installed Packages
+
+| Package | Version | Purpose |
+|---|---|---|
+| `league/flysystem-aws-s3-v3` | `3.0` | AWS S3 Flysystem adapter |
+| `league/flysystem-sftp-v3` | `3.0` | SFTP Flysystem adapter |
+| `google/cloud-storage` | `^1.48` | Google Cloud Storage client |
+
+All three are declared in `composer.json`. The S3 adapter is available immediately via the `s3` disk defined in `config/filesystems.php`. A GCS disk or SFTP disk must be added manually to that config file.
+
+## Configured Disks
+
+`config/filesystems.php` defines three disks by default:
+
+```php
+'default' => env('FILESYSTEM_DISK', 'local'),
+
+'disks' => [
+
+    'local' => [
+        'driver' => 'local',
+        'root'   => storage_path('app'),
+        'throw'  => false,
+    ],
+
+    'public' => [
+        'driver'     => 'local',
+        'root'       => storage_path('app/public'),
+        'url'        => env('APP_URL') . '/storage',
+        'visibility' => 'public',
+        'throw'      => false,
+    ],
+
+    's3' => [
+        'driver'                  => 's3',
+        'key'                     => env('AWS_ACCESS_KEY_ID'),
+        'secret'                  => env('AWS_SECRET_ACCESS_KEY'),
+        'region'                  => env('AWS_DEFAULT_REGION'),
+        'bucket'                  => env('AWS_BUCKET'),
+        'url'                     => env('AWS_URL'),
+        'endpoint'                => env('AWS_ENDPOINT'),
+        'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+        'throw'                   => false,
+    ],
+
+],
+```
+
+The `FILESYSTEM_DISK` environment variable selects the active default. In production, set it to `s3`.
+
+<Note>
+Run `php artisan storage:link` once after deployment when using the `public` disk. This creates the `public/storage` symlink that maps web-accessible URLs to `storage/app/public/`. The symlink target is configured in `config/filesystems.php` under `links`.
+</Note>
+
+## Where Files Are Stored
+
+| Module | Field / path | Disk | S3 path pattern |
+|---|---|---|---|
+| Employee photos (`GdoEmpleado`) | `ubicacion_foto` | `s3` | `archivo/empleados/fotos/YYYY/MM/{filename}` |
+| Job position manuals (`GdoCargo`) | `manual_funciones` | `s3` | `archivo/cargos/manuales/{filename}` |
+| Employee documents (`GdoDocsEmpleados`) | `ruta_archivo` | `s3` | `archivo/docs/{filename}` |
+| Property photos (`Res_inmueble_foto`) | `attached` | `s3` | `corpentunida/reserva/inmueble_{id}/` |
+| Correspondence attachments | `ruta_pdf` | `s3` | `corpentunida/correspondencia/{filename}` |
+| Correspondence signatures | `ruta_pdf` | `s3` | `firmas/{filename}` |
+| Payment receipts (`CarComprobantePago`) | `ruta_archivo` | `s3` | `cartera/comprobantes/YYYY/MM/` |
+| Indicators PDF reports | — | `s3` | `corpentunida/indicators/{filename}` |
+| Chat attachments | — | `s3` | `chat_attachments/{filename}` |
+| Interaction follow-up attachments | — | `s3` | `seguimientos/adjuntos/{filename}` |
+| Temp Excel imports | `excel_demografia_path` | `local` | `imports/{filename}` |
+
+## Uploading Files to S3
+
+All controllers use the same `storeAs()` or `put()` pattern:
+
+```php
+use Illuminate\Support\Facades\Storage;
+
+// Option 1: storeAs with explicit disk name
+$path = $request->file('ubicacion_foto')
+    ->storeAs(
+        'archivo/empleados/fotos/' . now()->format('Y/m'),
+        $filename,
+        's3'
+    );
+
+// Option 2: Storage facade with disk
+$path = Storage::disk('s3')->put('corpentunida/reserva/inmueble_' . $id, $foto);
+```
+
+The stored `$path` (e.g. `archivo/empleados/fotos/2024/03/a1b2c3.jpg`) is saved to the database column. The file is **never** served via a public URL — it is always accessed through a signed temporary URL.
+
+## Serving Files with Temporary URLs
+
+S3 objects are private. Corpen generates short-lived signed URLs for serving them:
+
+```php
+// Employee photo — 20 minute expiry
+return redirect(Storage::disk('s3')->temporaryUrl($empleado->ubicacion_foto, now()->addMinutes(20)));
+
+// Document view — 15 minutes, force PDF inline
+$url = Storage::disk('s3')->temporaryUrl(
+    $documento->ruta_archivo,
+    now()->addMinutes(15),
+    [
+        'ResponseContentType'        => 'application/pdf',
+        'ResponseContentDisposition' => 'inline; filename="' . basename($documento->ruta_archivo) . '"',
+    ]
+);
+return redirect($url);
+
+// Document download — 15 minutes, force attachment
+$url = Storage::disk('s3')->temporaryUrl(
+    $documento->ruta_archivo,
+    now()->addMinutes(15),
+    ['ResponseContentDisposition' => 'attachment; filename="' . $nombreArchivo . '"']
+);
+return redirect($url);
+```
+
+## Photo URL Accessor on the User Model
+
+`App\Models\User` exposes a `foto_perfil` accessor that returns a **route URL** — not a direct S3 URL. This indirection means the S3 path is never exposed to the browser and the signed URL is generated on demand:
+
+```php
+// app/Models/User.php
+
+/**
+ * Facilita llamar a $user->foto_perfil en cualquier vista.
+ */
+public function getFotoPerfilAttribute()
+{
+    $empleado = $this->perfilEmpleado;
+
+    if ($empleado && $empleado->ubicacion_foto) {
+        // Route 'archivo.empleado.verFoto' calls verFoto($id) which:
+        // 1. Checks S3 existence
+        // 2. Falls back to public/assets/media/avatars/blank.png if missing
+        // 3. Redirects to a 20-minute temporary URL
+        return route('archivo.empleado.verFoto', ['id' => $empleado->id]);
+    }
+
+    return null; // Blade views handle null with initials fallback
+}
+```
+
+In any Blade template: `{{ $user->foto_perfil ?? '/assets/media/avatars/blank.png' }}`.
+
+## Deleting Files
+
+Always delete the S3 object before removing the database record:
+
+```php
+if ($empleado->ubicacion_foto && Storage::disk('s3')->exists($empleado->ubicacion_foto)) {
+    Storage::disk('s3')->delete($empleado->ubicacion_foto);
+}
+$empleado->delete();
+```
+
+## Configuring Storage Backends
+
+<Tabs>
+  <Tab title="AWS S3">
+    Add the following to your `.env` file. The `s3` disk is already configured in `config/filesystems.php`:
+
+    ```env
+    FILESYSTEM_DISK=s3
+
+    AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+    AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    AWS_DEFAULT_REGION=us-east-1
+    AWS_BUCKET=corpentunida-storage
+    AWS_URL=
+    AWS_ENDPOINT=
+    AWS_USE_PATH_STYLE_ENDPOINT=false
+    ```
+
+    To use a compatible S3 service (e.g. MinIO or DigitalOcean Spaces), set `AWS_ENDPOINT` to the service URL and set `AWS_USE_PATH_STYLE_ENDPOINT=true`.
+  </Tab>
+  <Tab title="Google Cloud Storage">
+    `google/cloud-storage` ^1.48 is installed but requires a custom disk entry in `config/filesystems.php`. Add the following disk definition:
+
+    ```php
+    // config/filesystems.php — add inside 'disks'
+    'gcs' => [
+        'driver'         => 'gcs',
+        'project_id'     => env('GOOGLE_CLOUD_PROJECT_ID'),
+        'key_file'       => env('GOOGLE_CLOUD_KEY_FILE'),   // path to service account JSON
+        'bucket'         => env('GOOGLE_CLOUD_STORAGE_BUCKET'),
+        'path_prefix'    => env('GOOGLE_CLOUD_STORAGE_PATH_PREFIX', ''),
+        'storage_api_uri'=> env('GOOGLE_CLOUD_STORAGE_API_URI', 'https://storage.googleapis.com'),
+        'visibility'     => 'private',
+    ],
+    ```
+
+    Then set the corresponding environment variables:
+
+    ```env
+    FILESYSTEM_DISK=gcs
+
+    GOOGLE_CLOUD_PROJECT_ID=corpentunida-prod
+    GOOGLE_CLOUD_KEY_FILE=/var/www/keys/service-account.json
+    GOOGLE_CLOUD_STORAGE_BUCKET=corpentunida-storage
+    GOOGLE_CLOUD_STORAGE_PATH_PREFIX=
+    ```
+
+    Once the `gcs` disk is registered, swap any `Storage::disk('s3')` call to `Storage::disk('gcs')` — the Flysystem API is identical.
+  </Tab>
+  <Tab title="SFTP">
+    `league/flysystem-sftp-v3` ^3.0 is installed. Add the following disk to `config/filesystems.php`:
+
+    ```php
+    'sftp' => [
+        'driver'   => 'sftp',
+        'host'     => env('SFTP_HOST'),
+        'username' => env('SFTP_USERNAME'),
+        'password' => env('SFTP_PASSWORD'),
+        // — or use a private key —
+        'privateKey' => env('SFTP_PRIVATE_KEY'),
+        'passphrase' => env('SFTP_PASSPHRASE'),
+        'port'       => env('SFTP_PORT', 22),
+        'root'       => env('SFTP_ROOT', '/'),
+        'throw'      => false,
+    ],
+    ```
+
+    ```env
+    FILESYSTEM_DISK=sftp
+
+    SFTP_HOST=files.corpentunida.org
+    SFTP_USERNAME=corpen
+    SFTP_PASSWORD=secret
+    SFTP_PORT=22
+    SFTP_ROOT=/home/corpen/uploads
+    ```
+
+    Note that SFTP does not support temporary URLs — files must be served through your own authenticated proxy route.
+  </Tab>
+</Tabs>
+
+<Warning>
+Never commit AWS credentials, GCS service account JSON paths, or SFTP passwords to version control. All secrets must live in `.env` (which is listed in `.gitignore`). On production servers use IAM instance roles (AWS), Workload Identity (GCP), or a secrets manager instead of long-lived static keys.
+</Warning>
+
+## S3 Path Conventions
+
+Corpen stores files under a `corpentunida/` namespace prefix for modules that share the same bucket across environments:
+
+```
+corpentunida/
+├── indicators/          ← PDF indicator reports
+├── reserva/
+│   └── inmueble_{id}/  ← property photos
+└── correspondencia/     ← correspondence attachments
+
+archivo/
+├── empleados/
+│   └── fotos/
+│       └── YYYY/MM/     ← employee profile photos
+└── cargos/
+    └── manuales/        ← job description PDFs
+
+firmas/                  ← digital signature images
+cartera/
+└── comprobantes/
+    └── YYYY/MM/         ← payment receipt uploads
+chat_attachments/        ← messaging attachments
+seguimientos/
+└── adjuntos/            ← interaction follow-up attachments
+```
+
+## Local Development Setup
+
+For local development, set `FILESYSTEM_DISK=public` (or `local`) and run:
+
+```bash
+php artisan storage:link
+```
+
+This creates `public/storage` → `storage/app/public`. Any file stored on the `public` disk is accessible at `APP_URL/storage/{path}`. The `local` disk stores files in `storage/app/` but has no public URL — use it only for temporary files like Excel imports that are deleted after processing.
