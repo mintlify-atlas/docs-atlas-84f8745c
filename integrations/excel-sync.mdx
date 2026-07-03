@@ -1,7 +1,7 @@
 ---
-title: "Excel Sync: Bulk Data Import and Export in Corpen"
+title: "Excel Sync: Bulk Data Import and Export for Corpen"
 sidebarTitle: "Excel Sync"
-description: "Use Corpen's Excel synchronization tools to bulk-import and export associates, demographics, accounting data, and more using Maatwebsite Excel and PhpSpreadsheet."
+description: "Use Corpen's Excel sync tools to bulk-import and export associates, demographics, and accounting data with Maatwebsite Excel and PhpSpreadsheet."
 ---
 
 Corpen's Excel synchronization system lets administrators move large datasets in and out of the platform without manual data entry. Every module that manages master records — associates, demographics, accounting transactions, and insurance policies — ships with its own Export and Import class built on `maatwebsite/excel` ^3.1 and `phpoffice/phpspreadsheet` ^1.30. The workflow is always the same: download a template populated with live data, adjust it offline, re-upload, review a preview, and confirm the upsert into the database.
@@ -21,19 +21,18 @@ Corpen organises its Excel classes under `app/Exports/` and `app/Imports/`, grou
 
 **Exports**
 - `app/Exports/Asociado/AsociadosExport.php` — full associate master dump (48 columns)
-- `app/Exports/Asociado/CiudadExport.php`, `DireccionExport.php`, `PaisExport.php`, `RegionExport.php`, `SubregionExport.php` — demographic reference tables
 - `app/Exports/Demografia/DemografiaExport.php` — multi-sheet export (Paises, Regiones, Subregiones, Ciudades, Direcciones)
+- `app/Exports/Demografia/CiudadExport.php`, `DireccionExport.php`, `PaisExport.php`, `RegionExport.php`, `SubregionExport.php` — individual geographic-level sheets used by `DemografiaExport`
 - `app/Exports/ReporteSiniestrosExport.php` — insurance claims report with styled headers and a summary row
 - `app/Exports/TransaccionesExport.php` — accounting extract transactions
 
 **Imports**
 - `app/Imports/Asociado/AsociadosImport.php` — associates upsert with date transformation and boolean inference
-- `app/Imports/Asociado/TransaccionesImport.php` — associate transaction import
 - `app/Imports/Cartera/ExcelMorososImport.php` — portfolio delinquent-account import
-- `app/Imports/Contabilidad/` — accounting-specific import classes
+- `app/Imports/Contabilidad/TransaccionesImport.php` — accounting transactions upsert (chunks of 1 000, deduped by `id_transaccion`)
 - `app/Imports/Demografia/DemografiaImport.php` — multi-sheet import mapping each tab to a domain import class
 - `app/Imports/ExcelImport.php` — insurance policy import (`SegPoliza`)
-- `app/Imports/PolizasImport.php` — bulk insurance policy sync
+- `app/Imports/PolizasImport.php` — bulk insurance policy sync with gender and parentesco validation
 - `app/Imports/ExcelExport.php` — generic reusable export used by one-off reports
 
 ## Modules with Excel Sync

@@ -45,7 +45,7 @@ Vite compiles `resources/css/app.css` and `resources/js/app.js` into versioned b
 The table below maps every module to its URL prefix, primary controller namespace, and representative key routes derived from `routes/web.php`.
 
 <Note>
-  The `candirect` middleware alias (registered in `app/Http/Kernel.php`) maps to `App\Http\Middleware\CanDirect`. Unlike the standard `can:` guard which checks role-inherited permissions, `CanDirect` calls `$user->getDirectPermissions()` and matches **only explicitly assigned direct permissions** for the authenticated user. If none of the passed permission names appear in the user's direct permissions, the middleware aborts with a `404 — Página no encontrada` response. This makes sensitive module entry points (e.g., `candirect:seguros.poliza.index`, `candirect:correspondencia.usuario.admin`) invisible rather than forbidden, preventing enumeration of restricted features.
+  The `candirect` middleware alias (registered in `bootstrap/app.php`) maps to `App\Http\Middleware\CanDirect`. Unlike the standard `can:` guard which checks role-inherited permissions, `CanDirect` calls `$user->getDirectPermissions()` and matches **only explicitly assigned direct permissions** for the authenticated user. If none of the passed permission names appear in the user's direct permissions, the middleware aborts with a `404 — Página no encontrada` response. This makes sensitive module entry points (e.g., `candirect:seguros.poliza.index`, `candirect:correspondencia.usuario.admin`) invisible rather than forbidden, preventing enumeration of restricted features.
 </Note>
 
 ### Core & Member Management
@@ -205,7 +205,7 @@ Route-level enforcement uses two complementary guards:
 - **`candirect:` middleware** — custom `CanDirect` class; passes only when the named permission appears in `getDirectPermissions()`. Used for high-sensitivity entry points like `candirect:admin.users.index`, `candirect:seguros.poliza.index`, and `candirect:correspondencia.usuario.admin`.
 
 <Note>
-  The `CanDirect` middleware aborts with `404` (not `403`) when access is denied. This is a deliberate security design: unauthorized users see a "page not found" response rather than a "forbidden" response, preventing role and permission enumeration through the HTTP status code. The logic lives in `app/Http/Middleware/CanDirect.php` and is registered as the `candirect` alias in `app/Http/Kernel.php`.
+  The `CanDirect` middleware aborts with `404` (not `403`) when access is denied. This is a deliberate security design: unauthorized users see a "page not found" response rather than a "forbidden" response, preventing role and permission enumeration through the HTTP status code. The logic lives in `app/Http/Middleware/CanDirect.php` and is registered as the `candirect` alias in `bootstrap/app.php`.
 </Note>
 
 The `actions` table joins users to roles for the `IndexController` redirect logic. The `model_has_permissions` and `model_has_roles` tables (Spatie standard schema, created by migration `2024_11_05_135024_create_permission_tables.php`) drive all middleware checks at runtime.

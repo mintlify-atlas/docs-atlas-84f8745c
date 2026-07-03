@@ -56,12 +56,8 @@ Route::middleware('auth')
 | `GET /soportes/estadisticas/data` | `ScpEstadisticaController@getDashboardData` | AJAX JSON for chart rendering |
 | `GET /soportes/notificaciones` | `ScpSoporteController@getNotificaciones` | Bell-icon count for the navbar |
 | `GET /soportes/notificaciones/detalladas` | `ScpSoporteController@getNotificacionesDetalladas` | Full breakdown by state |
-| `GET /soportes/mis-soportes` | `ScpSoporteController@misSoportes` | Tickets assigned to the authenticated user |
 | `GET /soportes/sin-asignar` | `ScpSoporteController@sinAsignar` | Unassigned ticket queue |
 | `GET /soportes/pendientes` | `ScpSoporteController@pendientes` | Pending ticket view |
-| `POST /soportes/{scpSoporte}/asignar` | `ScpSoporteController@asignarAgente` | Assign an agent to a ticket |
-| `POST /soportes/{scpSoporte}/cambiar-estado` | `ScpSoporteController@cambiarEstado` | Direct state change |
-| `GET /soportes/buscar-rapido` | `ScpSoporteController@quickSearch` | JS autocomplete search |
 | `GET /soportes/descargar/{id}` | `ScpSoporteController@descargarSoporte` | Download ticket attachment (S3 signed URL, 2 min) |
 | `GET /soportes/ver/{id}` | `ScpSoporteController@verSoporte` | View ticket attachment inline (S3 signed URL, 5 min) |
 | `GET /soportes/enviar-correo-escalado/{id}` | `ScpNotificacionController@enviarCorreoEscalado` | Manual escalation email re-send |

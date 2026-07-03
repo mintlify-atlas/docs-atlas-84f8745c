@@ -111,11 +111,13 @@ The Inventario module provides end-to-end asset lifecycle management for the coo
     for ($i = 0; $i < $cantidadActivos; $i++) {
         InvActivo::create([
             'nombre'                 => $nombreSubgrupo,
+            'unidad_medida'          => '1',
+            'id_MaeMunicipios'       => 382,
             'id_Estado'              => 1,
             'id_InvDetalleCompras'   => $detalle->id,
+            'id_usersRegistro'       => auth()->id(),
             'invReferencias_id'      => $detalle->invReferencias_id,
             'fecha_inicio_garantia'  => $compra->fecha_factura,
-            'id_usersRegistro'       => auth()->id(),
         ]);
     }
     ```
@@ -125,7 +127,10 @@ The Inventario module provides end-to-end asset lifecycle management for the coo
     Open `GET /inventario/activos/{id}/edit` to fill in the remaining fields: `codigo_activo`, `serial`, `id_Estado`, `vida_util_meses`, warranty end date, assigned user, and municipality. Changes are persisted via `PUT /inventario/activos/{id}`.
 
     ```php
+    'nombre'                => 'required|string|max:255',
     'codigo_activo'         => 'required|string|unique:inv_activos,codigo_activo,{id}',
+    'invReferencias_id'     => 'required|exists:inv_referencias,id',
+    'id_Estado'             => 'required',
     'fecha_inicio_garantia' => 'nullable|date',
     'fecha_fin_garantia'    => 'nullable|date|after_or_equal:fecha_inicio_garantia',
     'vida_util_meses'       => 'nullable|integer|min:0',
@@ -150,7 +155,7 @@ The Inventario module provides end-to-end asset lifecycle management for the coo
 
 ## Warranty Alerts
 
-`GET /inventario/activos/alertas` surfaces all assets whose `fecha_fin_garantia` is null or falls within the next 30 days. The view includes two KPI cards (expired vs. expiring) and a Chart.js pie chart. Filters by `search` (name or `codigo_activo`) and `estado_garantia` (`vencido` / `por_vencer`) are available.
+`GET /inventario/activos/alertas` surfaces all assets whose `fecha_fin_garantia` is set and falls on or before 30 days from today (i.e., already expired or expiring soon). The view includes two KPI cards (expired vs. expiring) and a Chart.js pie chart. Filters by `search` (name or `codigo_activo`) and `estado_garantia` (`vencido` / `por_vencer`) are available.
 
 ## Reports
 

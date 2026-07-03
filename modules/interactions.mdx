@@ -1,7 +1,7 @@
 ---
 title: "Interactions Module: CRM Conversations and Follow-ups"
 sidebarTitle: "Interactions"
-description: "Log CRM interactions, manage multi-channel conversations, assign follow-ups, and track outcomes in Corpen's Interacciones module."
+description: "Log CRM interactions, manage multi-channel conversations, assign follow-ups, and track resolution outcomes in Corpen's Interacciones module."
 ---
 
 The Interactions module is Corpen's built-in CRM system for managing every touchpoint with cooperative members and clients. Agents log calls, emails, WhatsApp exchanges, and other contacts; set outcomes; schedule follow-ups; and track whether those follow-ups are completed on time. A rich reporting dashboard with PDF export and a team chat system are included in the same route group.
@@ -238,12 +238,14 @@ A contextual room ties the conversation to a specific model instance (e.g. a fol
 
 ## Attachment Storage
 
-Attachments uploaded during interaction creation or follow-up updates are stored in S3 under the path `corpentunida/daytrack/{interaction_id}/`. Temporary signed URLs (10-minute validity) are generated on demand via:
+Attachments uploaded during interaction creation or follow-up updates are stored in S3 under the path `corpentunida/daytrack/{interaction_id}/`. Files can be retrieved on demand via:
 
 ```http
 GET /interactions/attachment/view/{fileName}
 GET /interactions/attachment/download/{fileName}
 ```
+
+`viewAttachment` streams the raw file bytes with the correct `Content-Type` header. `downloadAttachment` triggers a browser download using `Storage::disk('s3')->download()`.
 
 <Tip>
   Use **workspaces** to organise agents by team or department. Each workspace maps to a `gdo_area`, so you can create dedicated spaces for collections, credit, and member services teams without mixing conversations. Private DMs are automatically routed to a dedicated workspace (ID 4) to keep team channels uncluttered.

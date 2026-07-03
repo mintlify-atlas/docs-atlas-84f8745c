@@ -31,10 +31,10 @@ The Associates module is the master registry for all cooperative members — ref
 The dashboard at `GET /asociados/tablero` renders key performance indicators derived directly from the `mae_asociados` table:
 
 - **Total expedientes** — full count of all associate records
-- **Expedientes activos** — records where `estado = 'Activo'`
-- **Expedientes inactivos** — records where `estado = 'Inactivo'`
-- **Digitalizados ECM** — records where `cargado_ecm = true`
-- **Pendientes de archivo** — records where `radicado` is `null` or empty
+- **Expedientes activos** — records where `estado` is in `['Activo', 'Vigente']`
+- **Expedientes inactivos** — records where `estado` is in `['Inactivo', 'Retirado', 'Suspendido']`
+- **ECM pipeline** — counters for `escaneado`, `cargado_ecm`, and `validado_archivo`
+- **Pendientes de radicado** — records where `radicado` is `null` or empty
 
 The five most recently created associates (with their `ciudad` and `distrito` relationships) are displayed in the **Últimos Ingresos** panel. Charts break down members by `estado_pastor` and `estado_civil`.
 
@@ -103,7 +103,7 @@ Each record in `mae_asociados` captures the following groups of data:
 
 ## Creating and Editing Associates
 
-The `store` and `update` actions apply the same 44-field validation ruleset from `getValidationRules()`. Key constraints:
+The `update` action applies the 43-field validation ruleset from `getValidationRules()`. The `store` action uses the dedicated `StoreMaeAsociadoRequest` form request class, which enforces the same field rules. Key constraints:
 
 - `cedula` must be unique in `mae_asociados` (unique constraint is relaxed for the record's own `id` on update).
 - `distrito_actual` must exist in `MaeDistritos.COD_DIST`.

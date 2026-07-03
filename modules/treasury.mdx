@@ -10,9 +10,9 @@ The Treasury module manages the outgoing side of Corpen's cash flow: the disburs
 
 ## Route reference
 
-The Treasury `PagoController` is a standard Laravel resource controller. Routes follow the default resource conventions:
+The Treasury `PagoController` is a standard Laravel resource controller located at `App\Http\Controllers\Tesoreria\PagoController`. The controller and model are fully implemented, but the resource routes are not yet registered in `routes/web.php`. The following table shows the conventional URLs and route names the controller is built to support:
 
-| Method | URL (convention) | Route name | Handler | Description |
+| Method | URL (convention) | Route name (convention) | Handler | Description |
 |---|---|---|---|---|
 | `GET` | `/pagos` | `pagos.index` | `PagoController@index` | List all payments (paginated, 15/page) |
 | `GET` | `/pagos/create` | `pagos.create` | `PagoController@create` | New payment form |
@@ -22,7 +22,11 @@ The Treasury `PagoController` is a standard Laravel resource controller. Routes 
 | `PUT` | `/pagos/{pago}` | `pagos.update` | `PagoController@update` | Update payment |
 | `DELETE` | `/pagos/{pago}` | `pagos.destroy` | `PagoController@destroy` | Delete payment |
 
-All routes require authentication. The controller uses Route Model Binding on the `Pago` model.
+<Warning>
+  These routes are not yet registered in `routes/web.php`. To activate the Treasury module, add `Route::resource('pagos', \App\Http\Controllers\Tesoreria\PagoController::class)->middleware('auth');` to the route file.
+</Warning>
+
+The controller uses Route Model Binding on the `Pago` model.
 
 ---
 

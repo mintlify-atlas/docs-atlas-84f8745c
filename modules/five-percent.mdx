@@ -62,10 +62,10 @@ The `CIN_MoviCont` table stores every individual contribution entry, keyed by me
 
 ### Viewing a member's movements
 
-The `show` action accepts the member's `id` (cédula) as a query parameter rather than a path segment:
+The `show` action accepts the member's `id` (cédula) as a query parameter. Although the resource route registers a `{cinco}` path parameter, the controller reads `$request->input('id')` and ignores the binding. In practice the URL is:
 
 ```http
-GET /cinco/cinco?id={cedula}
+GET /cinco/cinco/{cinco}?id={cedula}
 ```
 
 The controller retrieves all movements for that cédula, orders them by `Cuenta` then `id`, and detects **missing contribution periods** by analysing account `416542` (the AP account). It parses the `Observacion` field for date ranges matching the pattern `YYYY-MMM a YYYY-MMM` and identifies gaps in the sequence:
@@ -104,14 +104,14 @@ The `Retiros` model (backed by `CIN_RetirosListados`) stores the retirement reco
 
 The calculation engine reads the `RET_condicionesRetiros` table which stores a `valor` and `plus` coefficient per year. For pre-2017 years the formula is:
 
-```
+```text
 liquidacion = (months_remaining × valor) / 12
             + (days_remaining × valor) / 12 / 30
 ```
 
 For years from 2017 onward, an additional `plus` component applies to members with more than five years of service:
 
-```
+```text
 plus = (days_since_start / (365/12)) × plus_coeff
 ```
 
@@ -140,7 +140,7 @@ $terceros = Terceros::where('Nom_Ter', 'like', '%' . $name . '%')->get();
   </Step>
 
   <Step title="Search for the member">
-    Use the name search at `GET /retiros/retirosname/{name}` or navigate directly to `GET /retiros/calculoretiros/show?id={cedula}`. The system looks up the member in `MaeTerceros` using their `Cod_Ter` and loads their `fec_minis` (ministry entry date) to anchor the liquidation range.
+    Use the name search at `GET /retiros/retirosname/{name}` to find a member by name. Then navigate to `GET /retiros/calculoretiros/{calculoretiro}?id={cedula}`, where `{cedula}` is the member's `cod_ter`. The `RetirosListadoController@show` method reads the `id` query parameter to look up the member in `MaeTerceros`, loading their `fec_minis` (ministry entry date) to anchor the liquidation range.
   </Step>
 
   <Step title="Review the liquidation array">

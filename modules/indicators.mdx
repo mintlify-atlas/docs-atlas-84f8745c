@@ -1,7 +1,7 @@
 ---
 title: "Indicators Module: KPIs, Reports, and Assessments"
 sidebarTitle: "Indicators"
-description: "Define KPIs, generate downloadable indicator reports, and run quiz-based assessments for staff in Corpen's Indicators module."
+description: "Define KPIs, execute live SQL calculations, generate downloadable PDF reports, and run quiz-based assessments for staff in Corpen's Indicators module."
 ---
 
 The Indicators module lets Corpen management define measurable KPIs, execute live SQL queries against the database to calculate current values, download PDF performance reports, and run multiple-choice assessment quizzes for staff. KPIs are grouped by organizational area and each indicator stores the calculation formula alongside its target (meta) and measurement frequency. The quiz system is publicly accessible so that external participants or staff without an account can complete an assessment.
@@ -114,7 +114,7 @@ The view receives indicators grouped by area name, making it easy to render sect
     2. Renders the `indicators.informepdf` Blade view as a PDF using `barryvdh/laravel-dompdf` on A4 portrait paper.
     3. Saves the file to S3 at `corpentunida/indicators/InformeTIC_{timestamp}.pdf`.
     4. Creates an `IndRegistroInformes` record logging the file path, user, and download timestamp.
-    5. Streams the PDF directly to the browser as `informe_indicadores.pdf`.
+    5. Triggers a browser file download as `informe_indicadores.pdf` via `$pdf->download()`.
 
     ```http
     POST /indicators/generar/informe

@@ -118,7 +118,7 @@ $credito->load([
 
 <Steps>
   <Step title="Ensure a credit line exists">
-    Navigate to `GET /lineas_credito` and verify that the desired product line exists with the correct rate, term, and guarantee type. If not, create one via `GET /lineas_credito/create`. A credit line requires at least one `Garantia` record and one `TipoCredito` record to be selectable in the form.
+    Verify that the desired product line exists in `cre_lineas_creditos` with the correct rate, term, and guarantee type. The `LineaCreditoController` manages these records; its routes follow the `lineas_credito` resource convention but are not yet registered in `routes/web.php`. A credit line requires at least one `Garantia` record and one `TipoCredito` record to be selectable in the credit creation form.
   </Step>
 
   <Step title="Open the credit creation form">

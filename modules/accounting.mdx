@@ -1,7 +1,7 @@
 ---
-title: "Accounting Module: Bank Accounts and Statement Reconciliation"
+title: "Accounting Module: Bank Accounts and Reconciliation"
 sidebarTitle: "Accounting"
-description: "Manage bank accounts, import bank statements via Excel, and reconcile transactions in Corpen's Contabilidad module."
+description: "Manage bank accounts, import bank statements via Excel, auto-reconcile or manually link transactions in Corpen's Contabilidad module."
 ---
 
 The Accounting module (`/contabilidad`) is the financial backbone of Corpen. It provides a full lifecycle for bank account administration, statement ingestion, and transaction reconciliation against portfolio payment vouchers. All routes in this module are protected by the `auth` middleware and an additional `check.mantenimiento` guard — while maintenance mode is active, the module rejects new requests until the system administrator re-enables access.
@@ -34,7 +34,11 @@ Bank accounts are the root entities that all statement transactions reference. T
 
 ### Creating a bank account
 
-Navigate to `GET /contabilidad/cuentas-bancarias/create` and submit the following fields:
+<Warning>
+  `ConCuentaBancariaController` only implements `index`, `store`, `update`, and `destroy`. The `create`, `show`, and `edit` resource methods are not yet defined — navigating to those routes will result in an error until they are implemented.
+</Warning>
+
+Submit the following fields via `POST /contabilidad/cuentas-bancarias`:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -85,7 +89,7 @@ The `con_extractos_transacciones` table stores every individual bank movement. E
   <Step title="Fill and upload the file">
     Navigate to `GET /contabilidad/extractos/importar`, select the target bank account from the dropdown (only `Activa` accounts appear), and attach your completed `.xlsx` or `.csv` file. The server validates:
 
-    ```
+    ```text
     id_con_cuentas_bancaria: required, exists in con_cuentas_bancarias
     archivo_extracto: required, mimes: csv/txt/xls/xlsx, max 5 120 KB
     ```
@@ -131,7 +135,7 @@ The **AWS Master Sync** panel (`GET /contabilidad/sincronizar`) is designed for 
 </Steps>
 
 <Note>
-  If the preview page is refreshed (F5) or the session expires between Step 2 and Step 3, a `GET /contabilidad/subir-excel` guard redirects back to the sync panel with a friendly message: *"La página de previsualización expiró o fue recargada. Por favor, selecciona y sube el archivo de nuevo."*
+  If the preview page is refreshed (F5) or the session expires between Step 2 and Step 3, a `GET /contabilidad/subir-excel` guard redirects back to the sync panel with a validation error: *"La página de previsualización expiró o fue recargada. Por favor, selecciona y sube el archivo de nuevo."*
 </Note>
 
 ---

@@ -1,7 +1,7 @@
 ---
 title: "File Storage: S3, Google Cloud, and Local Storage in Corpen"
 sidebarTitle: "Storage"
-description: "Configure Corpen's file storage backends — AWS S3, Google Cloud Storage, SFTP, or local disk — for employee photos, reservations evidence, and document archives."
+description: "Configure Corpen's file storage — AWS S3, Google Cloud Storage, SFTP, or local disk — for employee photos, correspondence signatures, and PDF archives."
 ---
 
 Corpen stores user-uploaded files — employee photos, property images, correspondence signatures, document archives, payment receipts, and generated PDF reports — using Laravel's Filesystem abstraction. Out of the box, all production uploads go to **AWS S3** through `Storage::disk('s3')`. The `google/cloud-storage` and `league/flysystem-sftp-v3` packages are also installed, so the platform can be reconfigured for Google Cloud Storage or SFTP without code changes.

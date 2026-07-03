@@ -60,7 +60,7 @@ The Insurance (Seguros) module delivers full lifecycle management for group life
 | `PUT/PATCH` | `/seguros/reclamacion/{id}` | `seguros.reclamacion.update` | Update claim state |
 | `POST` | `/seguros/reclamacion/generarpdf` | `seguros.reclamacion.generarpdf` | Download claims report PDF (filtered by year) |
 | `GET` | `/seguros/reclamacion/informe/excel` | `seguros.reclamacion.download` | Export siniestros report to Excel |
-| `GET` | `/seguros/reclamacion/informe-completo` | `seguros.reclamacion.exportarInformeCompleto` | Full grouped claims report (Excel, by state) |
+| `GET` | `/seguros/seguros/reclamacion/informe-completo` | `seguros.reclamacion.exportarInformeCompleto` | Full grouped claims report (Excel, by state) |
 | `GET` | `/seguros/dashboard/reclamaciones` | `seguros.reclamaciones.dashboard` | Claims analytics dashboard |
 | `GET` | `/seguros/novedades` | `seguros.novedades.index` | List novedades by state tab |
 | `POST` | `/seguros/novedades` | `seguros.novedades.store` | Create a novedad |
@@ -72,8 +72,8 @@ The Insurance (Seguros) module delivers full lifecycle management for group life
 | `GET` | `/seguros/seguros/novedades/download` | `seguros.novedades.download` | Download pending novedades as Excel |
 | `GET` | `/seguros/beneficios` | `seguros.beneficios.index` | List policy benefits |
 | `POST` | `/seguros/beneficios/list` | `seguros.beneficios.list` | Filtered benefit list |
-| `POST` | `/seguros/filtopolizas` | `seguros.poliza.filtros` | Export filtered policies to PDF |
-| `POST` | `/seguros/filtopolizas/excel` | `seguros.poliza.filtroexcel` | Export filtered policies to Excel |
+| `POST` | `/seguros/seguros/filtopolizas` | `seguros.poliza.filtros` | Export filtered policies to PDF |
+| `POST` | `/seguros/seguros/filtopolizas/excel` | `seguros.poliza.filtroexcel` | Export filtered policies to Excel |
 
 ## Data Models
 
@@ -181,7 +181,7 @@ The Insurance (Seguros) module delivers full lifecycle management for group life
        - `parentesco = 'AF'` and `titular = cedula` if the person is a principal insured.
        - The supplied `parentesco` and `titular` (head of family group's cédula) if the person is a dependent.
 
-    All three creation steps are recorded in the Auditoría log as separate entries: `TERCERO CREADO`, `ASEGURADO CREADO`, and `POLIZA CREADA`.
+    Both creation steps are recorded in the Auditoría log as `TERCERO CREADO` and `ASEGURADO CREADO`. A `POLIZA CREADA` audit entry is also written; the policy record itself is associated after the insured is created.
   </Step>
 </Steps>
 
@@ -262,7 +262,7 @@ PDF forms uploaded during novedad creation are stored on Amazon S3 under `corpen
     `GET /seguros/reclamacion/informe/excel` — exports all claims to a dated `.xlsx` file with columns CEDULA, NOMBRE, DTO, AMPARO, VALOR COBERTURA, BONO CANASTA, TOTAL DESEMBOLSADO, FECHA RADICADO, FECHA DESEMBOLSO, DIAS HABILES. A totals row (sum and average working days) is appended automatically using `ReporteSiniestrosExport`.
   </Card>
   <Card title="Full Claims Report" icon="file-lines">
-    `GET /seguros/reclamacion/informe-completo` — exports claims grouped by state name using `ExportSegInformeReclamacion`, saved as `informe_siniestros.xlsx`.
+    `GET /seguros/seguros/reclamacion/informe-completo` — exports claims grouped by state name using `ExportSegInformeReclamacion`, saved as `informe_siniestros.xlsx`.
   </Card>
   <Card title="Novedades Excel" icon="bell">
     `GET /seguros/seguros/novedades/download` — exports all non-approved novedades (`estado != 3`) to a dated `NOVEDADES.xlsx` with columns CEDULA, NOMBRE, FECHA NACIMIENTO, EDAD, FECHA SOLICITUD, TIPO NOVEDAD, VALOR ASEGURADO SOLICITADO, GENERO, PARENTESCO, OBSERVACIONES.

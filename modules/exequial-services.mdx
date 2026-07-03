@@ -99,9 +99,9 @@ The Exequial Services module manages the full lifecycle of funeral plan membersh
     Navigate to `GET /exequiales/asociados/create`. The form loads the list of available funeral plans from `PlanController@index`. You need the member's cédula (national ID) ready before proceeding.
   </Step>
   <Step title="Validate the member exists in the directory">
-    The controller calls the internal `validarRegistro` method on submission. It checks:
-    - `ComaeExCli` (local table) — returns `1` if the cédula already has an active exequial plan.
-    - `ComaeTer` (third-parties table) — returns `2` if the person is in the directory but not yet enrolled.
+    Before submitting, the form calls `GET /exequiales/asociados` which triggers an AJAX call to the standalone `validarRegistro` endpoint. It checks:
+    - `ComaeExCli` (local table) — returns `1` if the cédula already has a record in the local exequial table.
+    - `ComaeTer` (third-parties table) — returns `2` if the person is in the directory but not yet enrolled locally.
     - Returns `0` if the cédula is not found anywhere.
 
     If the cédula is not yet enrolled (`0` or `2`), proceed to store.

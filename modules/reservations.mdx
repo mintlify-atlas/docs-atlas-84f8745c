@@ -10,8 +10,8 @@ The Reservas module allows cooperative associates (asociados) to browse availabl
 
 | Route prefix | Controller | Purpose |
 |---|---|---|
-| `reservas/tablero` | `ResDashboardController::index` | Reservations dashboard view |
-| `reservas/crudinmuebles` | `ResInmuebleController` | Property registry with S3 photo gallery |
+| `reservas/dashboard` | `ResDashboardController::index` | Reservations dashboard view |
+| `reservas/inmueble` | `ResInmuebleController` | Property registry with S3 photo gallery (named `reserva.crudinmuebles.*`) |
 | `reservas/reserva` | `ResReservaController` | Booking CRUD for associates |
 | `reservas/reservaI/{id}/create` | `ResReservaController::createReserva` | Initiate a booking for a specific property |
 | `reservas/reservaI/store` | `ResReservaController::storeReserva` | Submit the booking form |
@@ -40,7 +40,7 @@ The `storeReserva` method enforces the following business rules before creating 
 
 - **Start date in the past**: Rejected if `fechaInicio < today`.
 - **Horizon limit**: Start date cannot be more than 365 days from today.
-- **Stay length**: Maximum stay is 4 nights (`diff->days < 5`).
+- **Stay length**: Maximum stay is 4 nights (rejected when the day difference is `>= 5`).
 - **Annual frequency**: An associate can only have one non-cancelled reservation per rolling 12-month window, checked against `res_status_id != 4`.
 - **Overlap check**: The new booking dates must not intersect any existing reservation in statuses other than 3 (completed) or 4 (cancelled).
 
@@ -110,7 +110,7 @@ $existe_reserva = Res_reserva::where('res_inmueble_id', $inmueble_id)
   <Step title="Check-in confirmation and rating">
     When the associate checks in, staff submit `POST /reservas/reservaI/confirmar` with a comment and optional rating. A `Res_reserva_evidencia` record is created, and if a `calificacion` value is included, the status moves to `3` (completed) with `puntuacion_admin`, `observacion_recibido`, `fecha_recibido`, and `user_id_recibido` set. The associate receives an email inviting them to leave their own rating.
 
-    Associates can submit their rating via `POST /reservas/reservaI/calificacion` (`puntuacion_asociado`, `retroalimentacion`, `fecha_retroalimentacion`).
+    Associates can submit their rating via `POST /reservas/reservaI/calificacion` with fields `calificacion` (integer score stored as `puntuacion_asociado`) and `comentario` (stored as `retroalimentacion`). The `fecha_retroalimentacion` is set automatically to today.
   </Step>
 </Steps>
 
@@ -120,7 +120,7 @@ All property photos (`res_inmueble_fotos.attached`) and payment proof files (`re
 
 ## Property Registration
 
-Properties are managed at `GET /reservas/crudinmuebles` (admin only). Creating a property via `POST /reservas/crudinmuebles` accepts multiple images in the `imagenes[]` array, each stored individually on S3 under `corpentunida/reserva/inmueble_{id}/`:
+Properties are managed at `GET /reservas/inmueble` (admin only, resource named `reserva.crudinmuebles`). Creating a property via `POST /reservas/inmueble` accepts multiple images in the `imagenes[]` array, each stored individually on S3 under `corpentunida/reserva/inmueble_{id}/`:
 
 ```php
 // Validation rules for ResInmueble store
@@ -132,7 +132,7 @@ Properties are managed at `GET /reservas/crudinmuebles` (admin only). Creating a
 'imagenes.*'   => 'image|mimes:jpg,jpeg,png,webp|max:2048',
 ```
 
-A property can be toggled between active and inactive at `GET /reservas/crudinmuebles/{id}/toggle` (named `reserva.crudinmuebles.toggle`), which requires `candirect:reservas.inmueble.active`. Inactive properties are hidden from the associate's booking index.
+A property can be toggled between active and inactive via `PUT /reservas/inmueble/{id}/toggle` (named `reserva.inmueble.toggle`), which requires `candirect:reservas.inmueble.active`. Inactive properties are hidden from the associate's booking index.
 
 ## Automatic Cancellation
 

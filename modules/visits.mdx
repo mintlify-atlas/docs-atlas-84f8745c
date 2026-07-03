@@ -1,7 +1,7 @@
 ---
 title: "Visits Module: Member and Client Visit Tracking"
 sidebarTitle: "Visits"
-description: "Log, schedule, and review cooperative member visits with client auto-complete lookup and a centralized visit dashboard in Corpen."
+description: "Log and review cooperative member visits with client auto-complete lookup, paginated filtering, and a centralized visit dashboard in Corpen."
 ---
 
 The Visits module provides Corpen staff with a lightweight, dedicated area for logging and reviewing in-person visits by cooperative members and clients. Staff can search for a member by name or ID using an AJAX endpoint before registering a visit, and all visit records are accessible through both a paginated dashboard and a full CRUD resource.
@@ -112,7 +112,7 @@ Response:
     Post to `POST /visitas/corpen`. Required and optional fields validated by `store()`:
 
     ```php
-    // ScpSoporteController@store validation
+    // VisitaCorpenController@store validation
     'cedula'         => 'required|string',          // FK → mae_terceros.cod_ter
     'banco'          => 'required|string|max:255',  // City / branch (stored as 'banco' in DB)
     'motivo'         => 'nullable|string',
@@ -148,36 +148,6 @@ Submit a `PUT` request to `/visitas/corpen/{visitaCorpen}`. Only the fields `ban
 'motivo'         => 'nullable|string',
 'registrado_por' => 'nullable|string|max:255',
 ```
-
-## Statistics
-
-`VisitaCorpenController@estadisticas` returns a JSON summary of visits grouped by city and by the staff member who recorded them:
-
-```http
-GET /visitas/corpen/estadisticas
-```
-
-```json
-{
-  "por_ciudad": [
-    { "banco": "Bogotá", "total": 45 },
-    { "banco": "Medellín", "total": 20 }
-  ],
-  "por_usuario": [
-    { "registrado_por": "Juan Pérez", "total": 30 }
-  ]
-}
-```
-
-## Searching Visits by Client
-
-`VisitaCorpenController@search` returns all historical visits for a specific member by their `cedula`:
-
-```http
-GET /visitas/corpen/search?cedula=10234567
-```
-
-This returns an ordered JSON array of `VisitaCorpen` records with the related client loaded.
 
 <Note>
   The client search autocomplete endpoint (`GET /visitas/cliente/buscar?query=...`) is the primary entry point for staff to identify members before logging a visit. It queries `mae_terceros` — the shared member master table — using a `LIKE` search on both `cod_ter` and `nom_ter`, so partial names and partial IDs both work. Results are limited to **10 records** to keep the response fast.

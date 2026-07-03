@@ -1,7 +1,7 @@
 ---
 title: "Portfolio Module: Accounts Receivable and Payment Agreements"
 sidebarTitle: "Portfolio"
-description: "Manage accounts receivable, payment proof uploads, and debt restructuring agreements in Corpen's Cartera module."
+description: "Manage accounts receivable, upload member payment proofs to S3, and create debt restructuring agreements in Corpen's Cartera module."
 ---
 
 The Portfolio module (`/cartera`) manages the cooperative's accounts receivable. It provides three distinct capabilities: a delinquency list generated from an Excel upload (`ReadExelController`), a payment-proof (comprobante de pago) registration system where members upload evidence of their payments (`CarComprobantePagoController`), and a payment-agreement engine for restructuring delinquent debts (`AcuerdoController`). All routes are protected by the `auth` middleware.
@@ -23,13 +23,13 @@ Payment vouchers uploaded in this module are the **right-hand side** of the reco
 | `GET` | `/cartera/comprobantes/{id}` | `cartera.comprobantes.show` | `CarComprobantePagoController@show` | View voucher |
 | `PUT` | `/cartera/comprobantes/{id}` | `cartera.comprobantes.update` | `CarComprobantePagoController@update` | Update voucher |
 | `DELETE` | `/cartera/comprobantes/{id}` | `cartera.comprobantes.destroy` | `CarComprobantePagoController@destroy` | Delete voucher and S3 file |
-| `GET` | `/cartera/acuerdos` | `acuerdos.index` | `AcuerdoController@index` | List agreements |
-| `GET` | `/cartera/acuerdos/create` | `acuerdos.create` | `AcuerdoController@create` | New agreement form |
-| `POST` | `/cartera/acuerdos` | `acuerdos.store` | `AcuerdoController@store` | Persist agreement |
-| `GET` | `/cartera/acuerdos/{id}` | `acuerdos.show` | `AcuerdoController@show` | Agreement detail |
-| `GET` | `/cartera/acuerdos/{id}/edit` | `acuerdos.edit` | `AcuerdoController@edit` | Edit form |
-| `PUT` | `/cartera/acuerdos/{id}` | `acuerdos.update` | `AcuerdoController@update` | Update agreement |
-| `DELETE` | `/cartera/acuerdos/{id}` | `acuerdos.destroy` | `AcuerdoController@destroy` | Delete agreement |
+| `GET` | `/cartera/acuerdos` | *(not yet registered)* | `AcuerdoController@index` | List agreements |
+| `GET` | `/cartera/acuerdos/create` | *(not yet registered)* | `AcuerdoController@create` | New agreement form |
+| `POST` | `/cartera/acuerdos` | *(not yet registered)* | `AcuerdoController@store` | Persist agreement |
+| `GET` | `/cartera/acuerdos/{id}` | *(not yet registered)* | `AcuerdoController@show` | Agreement detail |
+| `GET` | `/cartera/acuerdos/{id}/edit` | *(not yet registered)* | `AcuerdoController@edit` | Edit form |
+| `PUT` | `/cartera/acuerdos/{id}` | *(not yet registered)* | `AcuerdoController@update` | Update agreement |
+| `DELETE` | `/cartera/acuerdos/{id}` | *(not yet registered)* | `AcuerdoController@destroy` | Delete agreement |
 
 <Note>
   The delinquency list routes (`cartera.morosos.*`) require the `can:cartera.listamorosos.generarcarta` permission in addition to authentication. Ensure users who need to view or process the receivables list have this permission assigned.
@@ -118,7 +118,7 @@ Payment agreements (`car_acuerdos`) allow Corpen to formally restructure a delin
 | `cre_creditos_id` | FK → `cre_creditos` | Delinquent credit being restructured |
 | `numero_acuerdo` | string (unique) | Agreement folio |
 | `fecha_acuerdo` | date | Date the agreement was signed |
-| `estado` | enum | `activo`, `incumplido`, `pagado`, `cancelado` |
+| `estado` | enum | `vigente`, `incumplido`, `pagado`, `cancelado` |
 | `dias_mora_inicial` | integer | Days past due at the time of the agreement |
 | `intereses_corrientes_acuerdo` | decimal (15,2) | Normal interest accrued |
 | `intereses_mora_acuerdo` | decimal (15,2) | Penalty interest accrued |
@@ -137,6 +137,10 @@ enum AcuerdoEstadoEnum: string
     case CANCELADO  = 'cancelado';
 }
 ```
+
+<Note>
+  The enum value for an active agreement is `vigente`, not `activo`. Always use `vigente` when creating or filtering agreements in their initial active state.
+</Note>
 
 The `User` model exposes:
 
@@ -169,7 +173,7 @@ public function acuerdosRegistrados(): HasMany
     - `intereses_corrientes_acuerdo` — accrued standard interest
     - `intereses_mora_acuerdo` — accrued penalty interest
     - `gastos_cobranza` — any legal costs being included (optional)
-    - `estado` — initial state (`activo` for new agreements)
+    - `estado` — initial state (`vigente` for new agreements)
     - `observaciones` — any special conditions
   </Step>
 

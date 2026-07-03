@@ -1,5 +1,5 @@
 ---
-title: "Get Started with Corpen in Under 10 Minutes"
+title: "Corpen Quickstart: Install, Configure, and Run Locally"
 sidebarTitle: "Quickstart"
 description: "Learn how to install, configure, and launch Corpen locally using Docker Compose or a standard Laravel development environment in a few steps."
 ---
@@ -241,4 +241,4 @@ php artisan route:cache
 php artisan view:cache
 ```
 
-The `Dockerfile` already runs all four of these steps during its build stage, so containerized deployments receive an optimized build automatically.
+The `Dockerfile` runs `npm run build` and `php artisan view:cache` during its build stage. For containerized production deployments, run `php artisan config:cache` and `php artisan route:cache` as a post-start step or add them to the container's entrypoint script, since those commands require a live database connection that is not available at image build time.

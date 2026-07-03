@@ -1,7 +1,7 @@
 ---
-title: "Role-Based Access Control in Corpen"
+title: "Corpen Role-Based Access Control with Spatie Permission"
 sidebarTitle: "Roles & Permissions"
-description: "Learn how Corpen implements role-based access using Spatie Laravel Permission, the CanDirect middleware, and admin UI for managing roles and user assignments."
+description: "How Corpen implements role-based access using Spatie Permission, the CanDirect middleware, and admin UI for managing roles and permissions."
 ---
 
 Corpen uses [Spatie Laravel Permission](https://spatie.be/docs/laravel-permission) (v6.9) for role-based access control across all modules. Every route in Corpen that requires a specific module access — insurance policies, claims, reservations, credits, archive management, and more — is guarded either by a `candirect` middleware check (direct permissions) or by Spatie's `can` middleware (role permissions). This page explains the full access control model and how to manage roles and permissions through the admin panel.
@@ -34,16 +34,16 @@ class User extends Authenticatable
 {
     use HasRoles;
 
-    // Direct permission check (used by CanDirect middleware)
-    public function hasPermission($permiso): bool
+    // Checks whether a permission is assigned directly to the user (model_has_permissions)
+    public function hasPermission($permiso)
     {
         return $this->permissions()
             ->where('name', $permiso)
             ->exists();
     }
 
-    // Checks permissions assigned directly to the user (not via role)
-    public function hasDirectPermission($permiso): bool
+    // Convenience wrapper around Spatie's getDirectPermissions()
+    public function hasDirectPermission($permiso)
     {
         return $this->getDirectPermissions()
             ->pluck('name')
@@ -52,7 +52,7 @@ class User extends Authenticatable
 }
 ```
 
-`hasDirectPermission()` is the method called internally by the `CanDirect` middleware. It uses Spatie's `getDirectPermissions()` which queries the `model_has_permissions` table — not `role_has_permissions`.
+The `CanDirect` middleware calls `$user->getDirectPermissions()` directly (the Spatie `HasRoles` method) to retrieve permissions stored in `model_has_permissions`. The custom `hasDirectPermission()` wrapper on `User` is a convenience helper available elsewhere in the codebase but is not invoked by the middleware itself.
 
 ---
 

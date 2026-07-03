@@ -1,7 +1,7 @@
 ---
-title: "Collections Module: Payment Receipt and Accounting Imputation"
+title: "Collections Module: Payment Receipts and Imputations"
 sidebarTitle: "Collections"
-description: "Record member payment receipts, apply accounting imputations, and track collection history in Corpen's Recaudo module."
+description: "Record member payment receipts, create accounting imputations linked to bank transactions, and track collection history in Corpen's Recaudo module."
 ---
 
 The Collections module (`/recaudo`) handles the incoming cash flow of the cooperative: recording payment receipts from members (`PagoRecaudo`) and creating the corresponding accounting imputations (`RecImputacionContable`) that link each bank-statement transaction to a third party and a district. Every route in the module is protected by the `auth` middleware.
@@ -23,7 +23,7 @@ The module sits between the Accounting module (which owns the source bank transa
 | `DELETE` | `/recaudo/imputaciones/{id}` | `recaudo.imputaciones.destroy` | `RecImputacionContableController@destroy` | Delete record |
 | `GET` | `/recaudo/buscar-distrito/{terceroId}` | `recaudo.buscar-distrito` | `RecImputacionContableController@buscarDistrito` | AJAX: resolve district code |
 
-Payments registered via `PagoRecaudoController` use the route name `pagos.index` and are accessed under the same `/recaudo` context.
+The `PagoRecaudoController` manages payment receipts within the recaudo namespace. Its resource routes are not separately registered in the main `web.php` group; payment receipt actions are handled through the controller directly.
 
 ---
 
@@ -97,7 +97,7 @@ The index also supports AJAX fragment refreshes: when the `X-Requested-With: XML
   <Step title="Complete and submit the imputation form">
     Fill in the remaining fields and submit `POST /recaudo/imputaciones`:
 
-    ```
+    ```text
     id_transaccion      required | exists:con_extractos_transacciones,id_transaccion
     id_tercero_origen   required | exists:MaeTerceros,cod_ter
     id_distrito         required | exists:MaeDistritos,COD_DIST

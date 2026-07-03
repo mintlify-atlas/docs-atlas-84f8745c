@@ -45,6 +45,7 @@ GET  /correspondencia/ajax/remitente-por-codigo/{cod_ter}        correspondencia
 
 # Outbound Communications
 GET    /correspondencia/comunicaciones-salida                     correspondencia.comunicaciones-salida.index
+GET    /correspondencia/comunicaciones-salida/create              correspondencia.comunicaciones-salida.create
 POST   /correspondencia/comunicaciones-salida                     correspondencia.comunicaciones-salida.store
 GET    /correspondencia/comunicaciones-salida/{id}                correspondencia.comunicaciones-salida.show
 PUT    /correspondencia/comunicaciones-salida/{id}                correspondencia.comunicaciones-salida.update
@@ -58,7 +59,7 @@ GET  /correspondencia/trds                                        correspondenci
 POST   /correspondencia/procesos/bulk                             correspondencia.procesos.bulk
 GET    /correspondencia/procesos                                  correspondencia.procesos.index (resource)
 POST   /correspondencia/procesos/{proceso}/asignar-usuario        correspondencia.procesos.asignarUsuario
-DELETE /correspondencia/procesos/{proceso}/remover-usuario/{uid}  correspondencia.procesos.removerUsuario
+DELETE /correspondencia/procesos/{proceso}/remover-usuario/{user_id}  correspondencia.procesos.removerUsuario
 POST   /correspondencia/procesos/{proceso}/guardar-estado         correspondencia.procesos.guardarEstado
 DELETE /correspondencia/procesos/estado/{id}                      correspondencia.procesos.eliminarEstado
 GET    /correspondencia/ajax/usuarios-proceso/{proceso_id}        correspondencia.ajax.usuarios.proceso

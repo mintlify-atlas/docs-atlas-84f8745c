@@ -1,5 +1,5 @@
 ---
-title: "Audit Log: System Activity Tracking in Corpen"
+title: "Audit Log: Tracking System Activity in Corpen Admin"
 sidebarTitle: "Audit Log"
 description: "View and filter system activity records in Corpen's audit log, which captures user actions across all modules for compliance and troubleshooting."
 ---
@@ -34,9 +34,11 @@ The audit log is persisted in the `Auditoria` table (note the capital A — this
 | `fechaRegistro` | `date` | Calendar date when the action was recorded |
 | `horaRegistro` | `time` | Clock time when the action was recorded |
 | `usuario` | `string` | Display name of the authenticated user (`Auth::user()->name`) |
-| `usuario_id` | `string` | ID of the authenticated user (`Auth::user()->id`) |
 | `accion` | `string` | Free-text description of what was done (e.g., `"add usuario app maria.lopez"`) |
-| `area` | `string` | Module or area of the application where the action originated (e.g., `"ADMINISTRACIÓN"`, `"CREDITOS"`) |
+
+<Note>
+  The `usuario_id` and `area` fields are written by `AuditoriaController@create` at the application layer but are **not** defined in the `2024_08_02_211212_create_auditorias_table` migration. If your database was created solely from migrations those columns will not exist. Ensure your schema is up to date with the codebase before relying on those fields for queries.
+</Note>
 
 ---
 
@@ -63,12 +65,12 @@ public function create($action, $area)
         'fechaRegistro' => $now->toDateString(),
         'horaRegistro'  => $now->toTimeString(),
         'usuario'       => Auth::user()->name,
-        'usuario_id'    => Auth::user()->id,
         'accion'        => $action,
-        'area'          => $area,
     ]);
 }
 ```
+
+The `$area` parameter is accepted by the method signature (controllers pass values such as `"ADMINISTRACIÓN"` or `"CREDITOS"`) but the column is not part of the base migration schema — see the note in the Database Table section above.
 
 This pattern is used consistently across admin, credits, portfolio, and other modules — the `area` argument differentiates which part of the system originated the entry.
 
@@ -109,6 +111,7 @@ The base `index` query returns all records. To narrow results for a specific com
   <Tab title="Filter by Area">
     ```php
     // All actions from the CREDITOS module
+    // Requires the 'area' column to be present in your schema
     $registros = auditoria::where('area', 'CREDITOS')
         ->orderBy('id', 'desc')
         ->get();
@@ -135,5 +138,5 @@ The user edit view at `/users/{user}/edit` already shows a summary count and the
 </Note>
 
 <Tip>
-  For compliance reporting, filter the `Auditoria` table by `area` to isolate a specific module's activity, then export the result set to Excel using a library such as `maatwebsite/excel`. Pair the `fechaRegistro` and `horaRegistro` columns to reconstruct a precise chronological timeline. Because `usuario_id` is stored alongside the display name, you can join back to the `users` table even if a user's name has been changed since the event was recorded.
+  For compliance reporting, pair the `fechaRegistro` and `horaRegistro` columns to reconstruct a precise chronological timeline, then export the result set to Excel using `maatwebsite/excel`. Filter by `usuario` to scope activity to a specific person. If your schema includes the `area` column, you can further isolate records by module (e.g., `"CREDITOS"`, `"ADMINISTRACIÓN"`).
 </Tip>
